@@ -1,7 +1,5 @@
 use synthestitch::top_down::*;
-use synthestitch::bottom_up::*;
 use std::fs::File;
-use std::iter::once;
 use std::path::Path;
 use clap::{Parser,ArgEnum};
 use serde::Serialize;
@@ -11,6 +9,7 @@ use serde_json::de::from_reader;
 use lambdas::*;
 use lambdas::domains::simple::*;
 use lambdas::domains::prim_lists::*;
+use synthestitch::task::*;
 
 
 

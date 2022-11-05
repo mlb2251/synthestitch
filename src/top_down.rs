@@ -6,6 +6,7 @@ use ordered_float::NotNan;
 use std::time::{Duration,Instant};
 use lambdas::*;
 use colorful::Colorful;
+use crate::task::*;
 
 
 /// Top-down synthesis
@@ -20,31 +21,6 @@ pub struct TopDownConfig {
     #[clap(long)]
     pub t_min_ll: Option<f32>,
     
-}
-
-#[derive(Clone)]
-pub struct Task<D: Domain> {
-    name: String,
-    tp: Type,
-    ios: Vec<IO<D>>
-}
-
-impl<D:Domain> Task<D> {
-    pub fn new(name: String, tp: Type, ios: Vec<IO<D>>) -> Task<D> {
-        Task {name, tp, ios}
-    }
-}
-
-#[derive(Clone)]
-pub struct IO<D: Domain> {
-    inputs: Vec<Val<D>>,
-    output: Val<D>
-}
-
-impl<D:Domain> IO<D> {
-    pub fn new(inputs: Vec<Val<D>>, output: Val<D>) -> IO<D> {
-        IO { inputs, output }
-    }
 }
 
 #[derive(Clone, Debug, Default)]
