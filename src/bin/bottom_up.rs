@@ -31,19 +31,13 @@ pub struct Args {
     pub domain: DomainChoice,
 
     #[clap(flatten)]
-    pub top_down_cfg: TopDownConfig,
+    pub bottom_up_cfg: BottomUpConfig,
 }
 
 #[derive(Debug, Clone, ArgEnum, Serialize)]
 pub enum DomainChoice {
     List,
     Simple
-}
-
-#[derive(Debug, Clone, ArgEnum, Serialize)]
-pub enum SynthChoice {
-    TopDown,
-    BottomUp,
 }
 
 
@@ -75,25 +69,44 @@ fn main() {
     match &args.domain {
         DomainChoice::Simple => {
             let tasks: Vec<Task<SimpleVal>> = args.file.as_ref().map(|path| parse_tasks(path)).unwrap_or(vec![]);
-            uniform_top_down::<SimpleVal>(&tasks, &args)
+            simple_bottom_up(&args)
         },
         DomainChoice::List => {
             let tasks: Vec<Task<ListVal>> = args.file.as_ref().map(|path| parse_tasks(path)).unwrap_or(vec![]);
-            uniform_top_down::<ListVal>(&tasks, &args)
+            prim_list_bottom_up(&args)
         },
     }
 
 }
 
-fn uniform_top_down<D: Domain>(tasks: &[Task<D>], args: &Args) {
+fn simple_bottom_up(args: &Args) {
+    let initial_strs: Vec<String> = (0..3).map(|i| i.to_string())
+    .chain(once(String::from("[1,2,3]"))).collect();
 
-    top_down_inplace::<D,_>(
-        OrigamiModel::new(
-            UniformModel::new(NotNan::new(0.).unwrap(),NotNan::new(0.).unwrap()),
-            "fix_flip".into(),
-            "fix".into()
-        ),
-        tasks,
-        &args.top_down_cfg
-    );
+    let initial: Vec<FoundExpr<SimpleVal>> = initial_strs.iter().map(|s| {
+        let expr = Expr::prim(s.into());
+        FoundExpr::new(SimpleVal::val_of_prim(s.into()).unwrap(), expr, 1)
+    }).collect();
+
+    let fns: Vec<(DSLEntry<SimpleVal>,usize)> = SimpleVal::dsl_entries()
+        .map(|entry| (entry.clone(),1)).collect();
+
+    bottom_up(&initial, &fns, &args.bottom_up_cfg)
 }
+
+
+fn prim_list_bottom_up(args: &Args) {
+    let initial_strs: Vec<String> = (0..10).map(|i| i.to_string())
+        .chain(once(String::from("[]"))).collect();
+
+    let initial: Vec<FoundExpr<ListVal>> = initial_strs.iter().map(|s| {
+        let expr = Expr::prim(s.into());
+        FoundExpr::new(ListVal::val_of_prim(s.into()).unwrap(), expr, 1)
+    }).collect();    
+
+    let fns: Vec<(DSLEntry<ListVal>,usize)> = ListVal::dsl_entries()
+        .map(|entry| (entry.clone(),1)).collect();
+
+    bottom_up(&initial, &fns, &args.bottom_up_cfg)
+}
+
