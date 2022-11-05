@@ -1,0 +1,36 @@
+[package]
+name = "synthestitch"
+version = "0.1.0"
+authors = ["Matthew Bowers <mlbowers@mit.edu>", "Theo X. Olausson <theoxo@mit.edu>"]
+edition = "2018"
+license = "MIT"
+description = "A scalable abstraction learning library"
+repository = "https://github.com/mlb2251/stitch"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+egg = {version = "0.7.1", features = ["serde-1"]}
+chrono = "0.4"
+serde_json = {version = "1.0", features = ["preserve_order"]}
+clap = { version = "3.1.0", features = ["derive"]}
+symbolic_expressions = "5"
+serde = "1"
+lazy_static = "1.4.0"
+itertools = "0.10.3"
+rand = "0.8.4"
+parking_lot = "0.12.0"
+colorful = "0.2.1"
+rustc-hash = "1.1.0"
+ordered-float = "3.0.0"
+lambdas = "0.1.0"
+
+# [patch.crates-io]
+# lambdas = { path = "../lambdas"}
+
+# [patch.crates-io]
+# lambdas = { git = "https://github.com/mlb2251/lambdas"}
+
+[profile.release]
+debug = true # for flamegraphs
+
