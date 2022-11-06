@@ -7,6 +7,7 @@ use std::time::{Duration,Instant};
 use lambdas::*;
 use colorful::Colorful;
 use crate::task::*;
+use once_cell::sync::Lazy;
 
 
 /// Top-down synthesis
@@ -128,26 +129,23 @@ impl<M: ProbabilisticModel> OrigamiModel<M> {
     }
 }
 
-lazy_static::lazy_static! {
-    static ref SYMMETRY_RULES: Vec<(usize,Symbol,Symbol)> = vec![
-        (0,"head","cons"), // arg_idx, parent, child
-        (0,"head","[]"),
-        (0,"tail","cons"),
-        (0,"tail","[]"),
-        (0,"+","0"),
-        (1,"+","0"),
-        (1,"-","0"),
-        (0,"+","+"),
-        (0,"*","*"),
-        (0,"*","0"),
-        (1,"*","0"),
-        (0,"*","1"),
-        (1,"*","1"),
-        (0,"is_empty","cons"),
-        (0,"is_empty","[]"),
-    ].into_iter().map(|(x,s1,s2)| (x,s1.into(),s2.into())).collect();
-    
-}
+static SYMMETRY_RULES: Lazy<Vec<(usize,Symbol,Symbol)>> = Lazy::new(|| vec![
+    (0,"head","cons"), // arg_idx, parent, child
+    (0,"head","[]"),
+    (0,"tail","cons"),
+    (0,"tail","[]"),
+    (0,"+","0"),
+    (1,"+","0"),
+    (1,"-","0"),
+    (0,"+","+"),
+    (0,"*","*"),
+    (0,"*","0"),
+    (1,"*","0"),
+    (0,"*","1"),
+    (1,"*","1"),
+    (0,"is_empty","cons"),
+    (0,"is_empty","[]"),
+].into_iter().map(|(x,s1,s2)| (x,s1.into(),s2.into())).collect());
 
 impl<M: ProbabilisticModel> ProbabilisticModel for OrigamiModel<M> {
     fn expansion_unnormalized_ll(&self, prod: &Lambda, expr: &PartialExpr, hole: &Hole) -> NotNan<f32> {
