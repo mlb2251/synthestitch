@@ -8,6 +8,8 @@ use lambdas::*;
 use colorful::Colorful;
 use crate::task::*;
 use once_cell::sync::Lazy;
+// use lambdas::alt_expr::Idx;
+// use lambdas::alt_expr;
 
 
 /// Top-down synthesis
@@ -32,14 +34,7 @@ struct Stats {
     num_finished: usize,
 }
 
-#[derive(Debug,Clone, PartialEq)]
-pub struct WorklistItem {
-    pub expr: PartialExpr,
-}
-
-impl Eq for WorklistItem {}
-
-#[derive(Debug,Clone, PartialEq, Eq)]
+#[derive(Debug,Clone)]
 pub struct PartialExpr {
     expr: Vec<Lambda>, // expr
     root: Option<usize>, // root of the expression in `expr` or None if its a single hole
@@ -62,25 +57,6 @@ impl Display for PartialExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // this expensive expr clone is silly to do lol
         write!(f, "{}", Expr::new(self.expr.clone()).to_string_uncurried(self.root.map(|x| Id::from(x))))
-    }
-}
-
-// partialord and ord for the binaryheap
-impl PartialOrd for WorklistItem {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.expr.ll.partial_cmp(&other.expr.ll) // compares by ll
-    }
-}
-
-impl Ord for WorklistItem {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.expr.ll.partial_cmp(&other.expr.ll).unwrap() // compares by ll but NaN != NaN
-    }
-}
-
-impl WorklistItem {
-    pub fn new(expr: PartialExpr) -> WorklistItem {
-        WorklistItem { expr }
     }
 }
 
