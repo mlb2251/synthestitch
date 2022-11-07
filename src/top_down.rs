@@ -523,7 +523,7 @@ pub fn top_down_inplace<D: Domain, M: ProbabilisticModel>(
 fn check_correctness<D: Domain>(tasks: &Vec<Task<D>>, expanded: &PartialExpr, env: &VecDeque<TypeRef>, stats: &mut Stats, solved_buf: &mut Vec<(String, PartialExpr)>) -> Vec<String>{
     let mut solved_tasks: Vec<String> = vec![];
 
-    // debug_assert!(expr.infer::<D>(Some(Id::from(expanded.root.unwrap())), &mut Context::empty(), &mut (env.clone())).is_ok());
+    // debug_assert!(expanded.expr.get(0).infer::<D>(&mut Context::empty(), &mut (env.clone())).is_ok());
     for task in tasks {
         let mut solved = true;
         for io in task.ios.iter() {
