@@ -8,9 +8,6 @@ use lambdas::*;
 use colorful::Colorful;
 use crate::task::*;
 use once_cell::sync::Lazy;
-// use lambdas::alt_expr::Idx;
-// use lambdas::alt_expr;
-
 
 /// Top-down synthesis
 #[derive(Parser, Debug, Serialize)]
@@ -36,27 +33,22 @@ struct Stats {
 
 #[derive(Debug,Clone)]
 pub struct PartialExpr {
-    expr: Vec<Lambda>, // expr
-    root: Option<usize>, // root of the expression in `expr` or None if its a single hole
+    expr: ExprSet,
     ctx: TypeSet, // typing context so far
     holes: Vec<Hole>, // holes so far
-    prev_prod: Option<Lambda>, // previous production rule used, this is a Var | Prim or it's None if this is empty / the root
+    prev_prod: Option<Node>, // previous production rule used, this is a Var | Prim or it's None if this is empty / the root
     ll: NotNan<f32>,
 }
 
 impl PartialExpr {
-    pub fn new(expr: Vec<Lambda>, root: Option<usize>, ctx: TypeSet, holes: Vec<Hole>, ll: NotNan<f32>) -> PartialExpr {
-        PartialExpr { expr, root, ctx, holes, prev_prod: None, ll }
-    }
     pub fn single_hole(tp: TypeRef, env: VecDeque<TypeRef>, typeset: TypeSet) -> PartialExpr {
-        PartialExpr::new(vec![], None, typeset, vec![Hole::new(tp,env,SENTINEL)], NotNan::new(0.).unwrap())
+        PartialExpr {expr: ExprSet::empty(Order::ParentFirst, false), ctx: typeset, holes: vec![Hole::new(tp,env,None)], prev_prod: None, ll: NotNan::new(0.).unwrap() }
     }
 }
 
 impl Display for PartialExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // this expensive expr clone is silly to do lol
-        write!(f, "{}", Expr::new(self.expr.clone()).to_string_uncurried(self.root.map(|x| Id::from(x))))
+        write!(f, "{}", self.expr.get(0))
     }
 }
 
@@ -64,18 +56,18 @@ impl Display for PartialExpr {
 pub struct Hole {
     tp: TypeRef,
     env: VecDeque<TypeRef>, // env[i] is $i
-    parent: usize, // parent of the hole - either the hole is the child of a lam or the right side of an app
+    parent: Option<Idx>, // parent of the hole - either the hole is the child of a lam or the right side of an app
 }
 
 impl Hole {
-    fn new(tp: TypeRef, env: VecDeque<TypeRef>, parent: usize) -> Hole {
+    fn new(tp: TypeRef, env: VecDeque<TypeRef>, parent: Option<Idx>) -> Hole {
         Hole {tp, env, parent}
     }
 }
 
 
 pub trait ProbabilisticModel {
-    fn expansion_unnormalized_ll(&self, prod: &Lambda, expr: &PartialExpr, hole: &Hole) -> NotNan<f32>;
+    fn expansion_unnormalized_ll(&self, prod: &Node, expr: &PartialExpr, hole: &Hole) -> NotNan<f32>;
 
     fn likelihood(_e: &Expr) -> NotNan<f32> {
         // todo implement this recursively making use of expansion_unnormalized_ll
@@ -124,24 +116,24 @@ static SYMMETRY_RULES: Lazy<Vec<(usize,Symbol,Symbol)>> = Lazy::new(|| vec![
 ].into_iter().map(|(x,s1,s2)| (x,s1.into(),s2.into())).collect());
 
 impl<M: ProbabilisticModel> ProbabilisticModel for OrigamiModel<M> {
-    fn expansion_unnormalized_ll(&self, prod: &Lambda, expr: &PartialExpr, hole: &Hole) -> NotNan<f32> {
+    fn expansion_unnormalized_ll(&self, prod: &Node, expr: &PartialExpr, hole: &Hole) -> NotNan<f32> {
         // if this is not the very first expansion, we forbid the fix_flip() operator
-        if !expr.expr.is_empty() && *prod == Lambda::Prim(self.fix_flip)  {
+        if expr.expr.len() != 0 && *prod == Node::Prim(self.fix_flip.clone())  {
             return NotNan::new(f32::NEG_INFINITY).unwrap();
         }
 
         // if this is the very first expansion, we require it to be the fix_flip() operator
-        if expr.expr.is_empty() && *prod != Lambda::Prim(self.fix_flip)  {
+        if expr.expr.len() == 0 && *prod != Node::Prim(self.fix_flip.clone())  {
             return NotNan::new(f32::NEG_INFINITY).unwrap();
         }
 
         // if this is an expansion to the fix() operator, set it to 0
-        if *prod == Lambda::Prim(self.fix) {
+        if *prod == Node::Prim(self.fix.clone()) {
             return NotNan::new(f32::NEG_INFINITY).unwrap();
         }
         // if we previously expanded with fix_flip(), then force next expansion (ie first argument) to be $0
-        if expr.prev_prod == Some(Lambda::Prim(self.fix_flip)) {
-            if let Lambda::Var(0) = prod {
+        if expr.prev_prod == Some(Node::Prim(self.fix_flip.clone())) {
+            if let Node::Var(0) = prod {
                 // doesnt really matter what we set this to as long as its not -inf, itll get normalized to ll=0 and P=1 since all other productions will be -inf
                 return NotNan::new(-1.).unwrap();
             } else {
@@ -151,12 +143,12 @@ impl<M: ProbabilisticModel> ProbabilisticModel for OrigamiModel<M> {
         // println!("{}", Expr::new(expr.expr.clone()).to_string_uncurried(expr.root.map(|u|u.into())));
 
         // we forbid the use of the very outermost argument if we used a fix_flip at the top level
-        if let Lambda::Var(i) = prod {
+        if let Node::Var(i) = prod {
             if *i+1 == hole.env.len() as i32 {
-                if let Some(root) = expr.root {
-                    if let Lambda::App([f,_]) = expr.expr[root] {
-                        if let Lambda::App([f,_]) = expr.expr[usize::from(f)] {
-                            if expr.expr[usize::from(f)] == Lambda::Prim(self.fix_flip) {
+                if expr.expr.len() != 0 {
+                    if let Node::App(f,_) = expr.expr[0] {
+                        if let Node::App(f,_) = expr.expr[f] {
+                            if expr.expr[f] == Node::Prim(self.fix_flip.clone()) {
                                 return NotNan::new(f32::NEG_INFINITY).unwrap();
                             }
                         }
@@ -166,9 +158,9 @@ impl<M: ProbabilisticModel> ProbabilisticModel for OrigamiModel<M> {
         }
 
         // dreamcoders symmetry breaking rules
-        if let Lambda::Prim(p) = prod {
-            if let Some((Lambda::Prim(parent), arg_idx)) = parent_and_arg_idx(expr, hole) {
-                if SYMMETRY_RULES.contains(&(arg_idx,parent,*p)) {
+        if let Node::Prim(p) = prod {
+            if let Some((Node::Prim(parent), arg_idx)) = parent_and_arg_idx(expr, hole) {
+                if SYMMETRY_RULES.contains(&(arg_idx,parent,p.clone())) {
                     return NotNan::new(f32::NEG_INFINITY).unwrap();
                 }
             }
@@ -183,19 +175,19 @@ impl<M: ProbabilisticModel> ProbabilisticModel for OrigamiModel<M> {
 
 /// who is the parent of the hole and which child are we of it. Doesnt handle higher order stuff.
 /// bc we didnt need that to replicate the dreamcoder symmetry rules
-fn parent_and_arg_idx(expr: &PartialExpr, hole: &Hole) -> Option<(Lambda, usize)> {
-    if hole.parent == SENTINEL {
+fn parent_and_arg_idx(expr: &PartialExpr, hole: &Hole) -> Option<(Node, usize)> {
+    if hole.parent.is_none() {
         return None
     }
-    if let Lambda::App([f,_]) = expr.expr[hole.parent] {
+    if let Node::App(f,_) = expr.expr[hole.parent.unwrap()] {
         let mut arg_idx = 0;
         let mut func = f;
         loop {
-            if let Lambda::App([f,_]) = expr.expr[usize::from(func)] {
+            if let Node::App(f,_) = expr.expr[func] {
                 arg_idx += 1;
                 func = f;
             } else {
-                return Some((expr.expr[usize::from(func)].clone(), arg_idx));
+                return Some((expr.expr[func].clone(), arg_idx));
             }
         }
     } else {
@@ -215,48 +207,19 @@ impl UniformModel {
 }
 
 impl ProbabilisticModel for UniformModel {
-    fn expansion_unnormalized_ll(&self, prod: &Lambda, _expr: &PartialExpr, _hole: &Hole) -> NotNan<f32> {
+    fn expansion_unnormalized_ll(&self, prod: &Node, _expr: &PartialExpr, _hole: &Hole) -> NotNan<f32> {
         match prod {
-            Lambda::Var(_) => self.var_ll,
-            Lambda::Prim(_) => self.prim_ll,
+            Node::Var(_) => self.var_ll,
+            Node::Prim(_) => self.prim_ll,
             _ => unreachable!()
         }
-    }
-}
-
-
-#[inline]
-fn fill_sentinel(node: &mut Lambda, id: usize) {
-    match node {
-        Lambda::App([_,x]) => {
-            assert_eq!(usize::from(*x), SENTINEL);
-            *x = Id::from(id);
-        },
-        Lambda::Lam([b]) => {
-            assert_eq!(usize::from(*b), SENTINEL); 
-            *b = Id::from(id); 
-        },
-        _ => unreachable!()
-    }
-}
-#[inline]
-fn make_sentinel(node: &mut Lambda) {
-    match node {
-        Lambda::App([_,x]) => {
-            *x = Id::from(SENTINEL);
-        },
-        Lambda::Lam([b]) => {
-            *b = Id::from(SENTINEL); 
-        },
-        _ => unreachable!()
     }
 }
 
 pub struct SaveState {
     hole: Hole, // hole that was expanded
     ctx_save_state: (usize,usize), // result of ctx.save_state() right before this expansion happened
-    root: Option<usize>,
-    prev_prod: Option<Lambda>,
+    prev_prod: Option<Node>,
     ll: NotNan<f32>,
     hole_len: usize, // len of expr.holes (after removing the new `hole`)
     expr_len: usize,
@@ -267,7 +230,7 @@ pub struct SaveState {
 
 impl SaveState {
     pub fn new(expr: &PartialExpr, hole: Hole, num_expansions: usize) -> SaveState {
-        SaveState { hole, ctx_save_state: expr.ctx.save_state(), root: expr.root.clone(), prev_prod: expr.prev_prod.clone(), ll: expr.ll, hole_len: expr.holes.len(), expr_len: expr.expr.len(), num_expansions }
+        SaveState { hole, ctx_save_state: expr.ctx.save_state(), prev_prod: expr.prev_prod.clone(), ll: expr.ll, hole_len: expr.holes.len(), expr_len: expr.expr.len(), num_expansions }
     }
     pub fn apply_with_hole(self, expr: &mut PartialExpr) {
         self.apply_without_hole(expr);
@@ -275,13 +238,12 @@ impl SaveState {
     }
     pub fn apply_without_hole(&self, expr: &mut PartialExpr) {
         expr.ctx.load_state(self.ctx_save_state);
-        expr.root = self.root.clone();
         expr.prev_prod = self.prev_prod.clone();
         expr.ll = self.ll;
         expr.holes.truncate(self.hole_len);
         expr.expr.truncate(self.expr_len);
-        if self.hole.parent != SENTINEL {
-            make_sentinel(&mut expr.expr[self.hole.parent]);
+        if let Some(parent) = self.hole.parent {
+            expr.expr.get_mut(parent).unexpand_right();
         }
     }
 }
@@ -307,47 +269,50 @@ impl Expansion {
         // todo its weird and silly that we repeat this here
         // instantiate if this wasnt a variable
         let (prod,prod_tp) = match self.prod {
-            Prod::Prim(p, raw_tp_ref) => (Lambda::Prim(p), raw_tp_ref.instantiate(&mut expr.ctx)),
-            Prod::Var(i, tp_ref) => (Lambda::Var(i), tp_ref),
+            Prod::Prim(p, raw_tp_ref) => (Node::Prim(p), raw_tp_ref.instantiate(&mut expr.ctx)),
+            Prod::Var(i, tp_ref) => (Node::Var(i), tp_ref),
         };
         
         expr.ctx.unify(&hole.tp, &prod_tp.return_type(&expr.ctx)).unwrap();
 
         expr.ll = self.ll;
         expr.prev_prod = Some(prod.clone());
-        expr.expr.push(prod.clone());
-        let mut expr_so_far_idx = expr.expr.len() - 1;
-        let num_holes = prod_tp.arity(&expr.ctx);
+
+        let mut to_expand: Option<Idx> = hole.parent.clone();
+
         // add a new hole for each arg, along with any apps and lams
-        for arg_tp in prod_tp.iter_args(&expr.ctx) {
-            // push on an app
-            expr.expr.push(Lambda::App([expr_so_far_idx.into(), SENTINEL.into()]));
-            expr_so_far_idx = expr.expr.len() - 1;
+        for arg_idx in (0..prod_tp.arity(&expr.ctx)).rev() {
+            let arg_tp = prod_tp.iter_args(&expr.ctx).nth(arg_idx).unwrap();
+            // make a new (app ?? ??)
+            let mut idx: Idx = expr.expr.add(Node::App(HOLE, HOLE));
+            // if this is the first arg then point the parent of the hole to this new app
+            // otherwise point the previously generated app to this app
+            if let Some(to_expand) = to_expand {
+                expr.expr.get_mut(to_expand).expand(idx);
+            }
+            to_expand = Some(idx);
 
             // if this arg is higher order it may have arguments - we push those types onto our new env and push lambdas
             // into our expr
             let mut new_hole_env = hole.env.clone();
             for inner_arg_tp in arg_tp.iter_args(&expr.ctx) {
                 new_hole_env.push_front(inner_arg_tp);
-                expr.expr.push(Lambda::Lam([SENTINEL.into()]));
-                // adjust pointers so the previous node points to the new node we created
-                let last = expr.expr.len() - 1;
-                fill_sentinel(&mut expr.expr[last - 1], last);
+                let lam_idx = expr.expr.add(Node::Lam(HOLE));
+                // adjust pointers so the previous app or lam we created points to this
+                expr.expr.get_mut(idx).expand_right(lam_idx);
+                idx = lam_idx;
             }
 
             // the hole type is the return type of the arg (bc all lambdas were autofilled)
             let new_hole_tp = arg_tp.return_type(&expr.ctx).clone();
-            expr.holes.push(Hole::new(new_hole_tp, new_hole_env, expr.expr.len() - 1))
+            expr.holes.push(Hole::new(new_hole_tp, new_hole_env, Some(idx)))
         }
-        let len = expr.holes.len();
-        expr.holes[len-num_holes..].reverse(); // reverse order of the ones we added
-        if hole.parent != SENTINEL {
-            fill_sentinel(&mut expr.expr[hole.parent], expr_so_far_idx);
-        } else {
-            // filling the single_hole so we can set our root
-            assert!(expr.root.is_none());
-            expr.root = Some(expr_so_far_idx);
+
+        let idx = expr.expr.add(prod.clone());
+        if let Some(to_expand) = to_expand {
+            expr.expr.get_mut(to_expand).expand(idx);
         }
+
     }
 }
 
@@ -370,9 +335,9 @@ pub fn add_expansions<D: Domain, M: ProbabilisticModel>(expr: &mut PartialExpr, 
     {
         expr.ctx.load_state(ctx_save_state);
 
-        let (node,prod_tp) = match prod {
-            Prod::Prim(p, raw_tp_ref) => (Lambda::Prim(p), raw_tp_ref.instantiate(&mut expr.ctx)),
-            Prod::Var(i, tp_ref) => (Lambda::Var(i), tp_ref),
+        let (node,prod_tp) = match &prod {
+            Prod::Prim(p, raw_tp_ref) => (Node::Prim(p.clone()), raw_tp_ref.instantiate(&mut expr.ctx)),
+            Prod::Var(i, tp_ref) => (Node::Var(*i), tp_ref.clone()),
         };
         
 
@@ -445,11 +410,11 @@ pub fn top_down_inplace<D: Domain, M: ProbabilisticModel>(
     //     .keys().cloned().chain(D::dsl_entries().map(|entry| entry.tp.clone()))
     //     .map(|tp| (tp.clone(),original_typeset.add_tp(&tp))).collect();
 
-    let mut prods: Vec<Prod> = D::dsl_entries().map(|entry| Prod::Prim(entry.name, original_typeset.add_tp(&entry.tp))).collect();
+    let mut prods: Vec<Prod> = D::dsl_entries().map(|entry| Prod::Prim(entry.name.clone(), original_typeset.add_tp(&entry.tp))).collect();
     // sort by arity as DC does to explore smaller things first (also sort  by name but thats just for determinism)
     prods.sort_by_key(|prod| {
         if let Prod::Prim(name, tp) = prod {
-            (tp.arity(&original_typeset),*name)
+            (tp.arity(&original_typeset),name.clone())
         } else { unreachable!() }
     });
 
@@ -557,7 +522,7 @@ pub fn top_down_inplace<D: Domain, M: ProbabilisticModel>(
 #[inline(never)]
 fn check_correctness<D: Domain>(tasks: &Vec<Task<D>>, expanded: &PartialExpr, env: &VecDeque<TypeRef>, stats: &mut Stats, solved_buf: &mut Vec<(String, PartialExpr)>) -> Vec<String>{
     let mut solved_tasks: Vec<String> = vec![];
-    let expr = Expr::new(expanded.expr.clone());
+
     // debug_assert!(expr.infer::<D>(Some(Id::from(expanded.root.unwrap())), &mut Context::empty(), &mut (env.clone())).is_ok());
     for task in tasks {
         let mut solved = true;
@@ -567,26 +532,23 @@ fn check_correctness<D: Domain>(tasks: &Vec<Task<D>>, expanded: &PartialExpr, en
             exec_env.reverse(); // for proper arg order
 
             // println!("about to exec");
-            if let Ok(res) = expr.eval(Id::from(expanded.root.unwrap()), &mut exec_env.clone(), Some(Duration::from_millis(10))) {
-            // if let Ok(res) = exec.eval_child(exec.expr.root(),&mut exec_env.clone()) {
-                // println!("done");
+            match expanded.expr.get(0).eval(&mut exec_env.clone(), Some(Duration::from_millis(10))) {
+                Ok(res) => {
                     stats.num_eval_ok += 1;
-
-                if res == io.output {
-                    // println!("{} {} {:?}", expanded, "=>".green(), res);
-                } else {
-                    // println!("{} {} {:?}", expanded, "=>".yellow(), res);
+                    if res == io.output {
+                        // println!("{} {} {:?}", expanded, "=>".green(), res);
+                    } else {
+                        // println!("{} {} {:?}", expanded, "=>".yellow(), res);
+                        solved = false;
+                        break
+                    }
+                },
+                Err(_) => {
+                    // println!("{} {} err: {}", "=>".red(), expanded, err);
+                    stats.num_eval_err += 1;
                     solved = false;
                     break
                 }
-
-            } else {
-                // println!("done");
-
-                // println!("{} {} err", "=>".red(), expanded);
-                stats.num_eval_err += 1;
-                solved = false;
-                break
             }
         }
         // solved_buf.push((unnormalized_ll, task.name.clone(), expanded.clone()));
