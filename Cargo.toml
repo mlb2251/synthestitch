@@ -24,7 +24,7 @@ lambdas = "0.1.0"
 # lambdas = { path = "../lambdas"}
 
 [patch.crates-io]
-lambdas = { git = "https://github.com/mlb2251/lambdas", branch = "no_egg"}
+lambdas = { git = "https://github.com/mlb2251/lambdas", rev = "564ddc0"}
 
 [profile.release]
 debug = true # for flamegraphs

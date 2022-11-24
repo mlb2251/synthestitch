@@ -42,7 +42,7 @@ pub struct PartialExpr {
 
 impl PartialExpr {
     pub fn single_hole(tp: TypeRef, env: VecDeque<TypeRef>, typeset: TypeSet) -> PartialExpr {
-        PartialExpr {expr: ExprSet::empty(Order::ParentFirst, false), ctx: typeset, holes: vec![Hole::new(tp,env,None)], prev_prod: None, ll: NotNan::new(0.).unwrap() }
+        PartialExpr {expr: ExprSet::empty(Order::ParentFirst, false, false), ctx: typeset, holes: vec![Hole::new(tp,env,None)], prev_prod: None, ll: NotNan::new(0.).unwrap() }
     }
 }
 
