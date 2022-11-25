@@ -384,12 +384,13 @@ pub fn add_expansions<D: Domain, M: ProbabilisticModel>(expr: &mut PartialExpr, 
 
 pub fn top_down_inplace<D: Domain, M: ProbabilisticModel>(
     model: M,
+    dsl: &DSL<D>,
     all_tasks: &[Task<D>],
     cfg: &TopDownConfig,
 ) {
 
     println!("DSL:");
-    for entry in D::dsl_entries() {
+    for entry in dsl.productions.values() {
         println!("\t{} :: {}", entry.name, entry.tp);
     }
 
@@ -410,7 +411,7 @@ pub fn top_down_inplace<D: Domain, M: ProbabilisticModel>(
     //     .keys().cloned().chain(D::dsl_entries().map(|entry| entry.tp.clone()))
     //     .map(|tp| (tp.clone(),original_typeset.add_tp(&tp))).collect();
 
-    let mut prods: Vec<Prod> = D::dsl_entries().map(|entry| Prod::Prim(entry.name.clone(), original_typeset.add_tp(&entry.tp))).collect();
+    let mut prods: Vec<Prod> = dsl.productions.values().map(|entry| Prod::Prim(entry.name.clone(), original_typeset.add_tp(&entry.tp))).collect();
     // sort by arity as DC does to explore smaller things first (also sort  by name but thats just for determinism)
     prods.sort_by_key(|prod| {
         if let Prod::Prim(name, tp) = prod {
@@ -490,7 +491,7 @@ pub fn top_down_inplace<D: Domain, M: ProbabilisticModel>(
                     }
                     stats.num_finished += 1;
 
-                    let solved_tasks = check_correctness(tasks, &expr, &env, &mut stats, &mut solved_buf);
+                    let solved_tasks = check_correctness(dsl, tasks, &expr, &env, &mut stats, &mut solved_buf);
 
                     for task_name in solved_tasks {
                         println!("{} {} [ll={}] @ {}s: {}", "Solved".green(), task_name, expr.ll, tstart.elapsed().as_secs_f32(), expr);
@@ -520,7 +521,7 @@ pub fn top_down_inplace<D: Domain, M: ProbabilisticModel>(
 }
 
 #[inline(never)]
-fn check_correctness<D: Domain>(tasks: &Vec<Task<D>>, expanded: &PartialExpr, env: &VecDeque<TypeRef>, stats: &mut Stats, solved_buf: &mut Vec<(String, PartialExpr)>) -> Vec<String>{
+fn check_correctness<D: Domain>(dsl: &DSL<D>, tasks: &Vec<Task<D>>, expanded: &PartialExpr, env: &VecDeque<TypeRef>, stats: &mut Stats, solved_buf: &mut Vec<(String, PartialExpr)>) -> Vec<String>{
     let mut solved_tasks: Vec<String> = vec![];
 
     // debug_assert!(expanded.expr.get(0).infer::<D>(&mut Context::empty(), &mut (env.clone())).is_ok());
@@ -532,7 +533,7 @@ fn check_correctness<D: Domain>(tasks: &Vec<Task<D>>, expanded: &PartialExpr, en
             exec_env.reverse(); // for proper arg order
 
             // println!("about to exec");
-            match expanded.expr.get(0).eval(&mut exec_env.clone(), Some(Duration::from_millis(10))) {
+            match expanded.expr.get(0).eval(&mut exec_env.clone(), dsl, Some(Duration::from_millis(10))) {
                 Ok(res) => {
                     stats.num_eval_ok += 1;
                     if res == io.output {

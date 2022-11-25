@@ -46,7 +46,7 @@ pub enum SynthChoice {
 }
 
 
-fn parse_tasks<D: Domain>(path: &dyn AsRef<Path>) -> Vec<Task<D>> {
+fn parse_tasks<D: Domain>(path: &dyn AsRef<Path>, dsl: &DSL<D>) -> Vec<Task<D>> {
     let json: serde_json::Value = from_reader(File::open(path).expect("file not found")).expect("json deserializing error");
     let tasks: Vec<Task<D>> = json.as_array().unwrap().iter().map(|task| {
         Task::new(
@@ -57,8 +57,8 @@ fn parse_tasks<D: Domain>(path: &dyn AsRef<Path>) -> Vec<Task<D>> {
                 let output: String = io.as_array().unwrap()[1].as_str().unwrap().to_string();
                 IO::new(
                     // remove all spaces since prims cant have spaces within them
-                    inputs.iter().map(|i| D::val_of_prim(&i.replace(" ", "").into()).expect(&format!("failed to parse {i} as a Val"))).collect(),
-                    D::val_of_prim(&output.replace(" ", "").into()).unwrap()
+                    inputs.iter().map(|i| dsl.val_of_prim(&i.replace(" ", "").into()).expect(&format!("failed to parse {i} as a Val"))).collect(),
+                    dsl.val_of_prim(&output.replace(" ", "").into()).unwrap()
                 )
             }).collect(),
         )
@@ -73,18 +73,20 @@ fn main() {
 
     match &args.domain {
         DomainChoice::Simple => {
-            let tasks: Vec<Task<SimpleVal>> = args.file.as_ref().map(|path| parse_tasks(path)).unwrap_or(vec![]);
-            uniform_top_down::<SimpleVal>(&tasks, &args)
+            let dsl = SimpleVal::new_dsl();
+            let tasks: Vec<Task<SimpleVal>> = args.file.as_ref().map(|path| parse_tasks(path,&dsl)).unwrap_or(vec![]);
+            uniform_top_down::<SimpleVal>(&tasks, &dsl, &args)
         },
         DomainChoice::List => {
-            let tasks: Vec<Task<ListVal>> = args.file.as_ref().map(|path| parse_tasks(path)).unwrap_or(vec![]);
-            uniform_top_down::<ListVal>(&tasks, &args)
+            let dsl = ListVal::new_dsl();
+            let tasks: Vec<Task<ListVal>> = args.file.as_ref().map(|path| parse_tasks(path, &dsl)).unwrap_or(vec![]);
+            uniform_top_down::<ListVal>(&tasks, &dsl, &args)
         },
     }
 
 }
 
-fn uniform_top_down<D: Domain>(tasks: &[Task<D>], args: &Args) {
+fn uniform_top_down<D: Domain>(tasks: &[Task<D>], dsl: &DSL<D>, args: &Args) {
 
     top_down_inplace::<D,_>(
         OrigamiModel::new(
@@ -92,6 +94,7 @@ fn uniform_top_down<D: Domain>(tasks: &[Task<D>], args: &Args) {
             "fix_flip".into(),
             "fix".into()
         ),
+        dsl,
         tasks,
         &args.top_down_cfg
     );
