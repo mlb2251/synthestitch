@@ -3,12 +3,12 @@ use lambdas::*;
 #[derive(Clone)]
 pub struct Task<D: Domain> {
     pub name: String,
-    pub tp: Type,
+    pub tp: SlowType,
     pub ios: Vec<IO<D>>
 }
 
 impl<D:Domain> Task<D> {
-    pub fn new(name: String, tp: Type, ios: Vec<IO<D>>) -> Task<D> {
+    pub fn new(name: String, tp: SlowType, ios: Vec<IO<D>>) -> Task<D> {
         Task {name, tp, ios}
     }
 }

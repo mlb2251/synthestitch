@@ -20,11 +20,11 @@ rustc-hash = "1.1.0"
 ordered-float = "3.0.0"
 lambdas = "0.1.0"
 
-# [patch.crates-io]
-# lambdas = { path = "../lambdas"}
-
 [patch.crates-io]
-lambdas = { git = "https://github.com/mlb2251/lambdas", branch = "main"}
+lambdas = { path = "../lambdas"}
+
+# [patch.crates-io]
+# lambdas = { git = "https://github.com/mlb2251/lambdas", branch = "main"}
 
 [profile.release]
 debug = true # for flamegraphs

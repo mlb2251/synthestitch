@@ -41,7 +41,7 @@ pub struct PartialExpr {
 }
 
 impl PartialExpr {
-    pub fn single_hole(tp: TypeRef, env: VecDeque<TypeRef>, typeset: TypeSet) -> PartialExpr {
+    pub fn single_hole(tp: Type, env: VecDeque<Type>, typeset: TypeSet) -> PartialExpr {
         PartialExpr {expr: ExprSet::empty(Order::ParentFirst, false, false), ctx: typeset, holes: vec![Hole::new(tp,env,None)], prev_prod: None, ll: NotNan::new(0.).unwrap() }
     }
 }
@@ -54,13 +54,13 @@ impl Display for PartialExpr {
 
 #[derive(Debug,Clone, PartialEq, Eq)]
 pub struct Hole {
-    tp: TypeRef,
-    env: VecDeque<TypeRef>, // env[i] is $i
+    tp: Type,
+    env: VecDeque<Type>, // env[i] is $i
     parent: Option<Idx>, // parent of the hole - either the hole is the child of a lam or the right side of an app
 }
 
 impl Hole {
-    fn new(tp: TypeRef, env: VecDeque<TypeRef>, parent: Option<Idx>) -> Hole {
+    fn new(tp: Type, env: VecDeque<Type>, parent: Option<Idx>) -> Hole {
         Hole {tp, env, parent}
     }
 }
@@ -254,8 +254,8 @@ pub struct Expansion {
 }
 #[derive(Clone,Debug)]
 pub enum Prod {
-    Prim(Symbol, RawTypeRef),
-    Var(i32, TypeRef)
+    Prim(Symbol, Idx),
+    Var(i32, Type)
 }
 
 
@@ -269,7 +269,7 @@ impl Expansion {
         // todo its weird and silly that we repeat this here
         // instantiate if this wasnt a variable
         let (prod,prod_tp) = match self.prod {
-            Prod::Prim(p, raw_tp_ref) => (Node::Prim(p), raw_tp_ref.instantiate(&mut expr.ctx)),
+            Prod::Prim(p, raw_tp_ref) => (Node::Prim(p), expr.ctx.instantiate(raw_tp_ref)),
             Prod::Var(i, tp_ref) => (Node::Var(i), tp_ref),
         };
         
@@ -295,12 +295,14 @@ impl Expansion {
             // if this arg is higher order it may have arguments - we push those types onto our new env and push lambdas
             // into our expr
             let mut new_hole_env = hole.env.clone();
-            for inner_arg_tp in arg_tp.iter_args(&expr.ctx) {
-                new_hole_env.push_front(inner_arg_tp);
-                let lam_idx = expr.expr.add(Node::Lam(HOLE));
-                // adjust pointers so the previous app or lam we created points to this
-                expr.expr.get_mut(idx).expand_right(lam_idx);
-                idx = lam_idx;
+            if arg_tp.is_arrow(&expr.ctx) {
+                for inner_arg_tp in arg_tp.iter_args(&expr.ctx) {
+                    new_hole_env.push_front(inner_arg_tp);
+                    let lam_idx = expr.expr.add(Node::Lam(HOLE));
+                    // adjust pointers so the previous app or lam we created points to this
+                    expr.expr.get_mut(idx).expand_right(lam_idx);
+                    idx = lam_idx;
+                }
             }
 
             // the hole type is the return type of the arg (bc all lambdas were autofilled)
@@ -336,7 +338,7 @@ pub fn add_expansions<D: Domain, M: ProbabilisticModel>(expr: &mut PartialExpr, 
         expr.ctx.load_state(ctx_save_state);
 
         let (node,prod_tp) = match &prod {
-            Prod::Prim(p, raw_tp_ref) => (Node::Prim(p.clone()), raw_tp_ref.instantiate(&mut expr.ctx)),
+            Prod::Prim(p, raw_tp_ref) => (Node::Prim(p.clone()), expr.ctx.instantiate(*raw_tp_ref)),
             Prod::Var(i, tp_ref) => (Node::Var(*i), tp_ref.clone()),
         };
         
@@ -404,7 +406,7 @@ pub fn top_down_inplace<D: Domain, M: ProbabilisticModel>(
 
     let mut original_typeset = TypeSet::empty();
 
-    let task_tps: Vec<(RawTypeRef,Vec<Task<D>>)> = all_tasks.iter().map(|task| (task.tp.clone(), task.clone())).into_group_map()
+    let task_tps: Vec<(Idx,Vec<Task<D>>)> = all_tasks.iter().map(|task| (task.tp.clone(), task.clone())).into_group_map()
         .into_iter().map(|(tp,tasks)| (original_typeset.add_tp(&tp),tasks)).collect();
 
     // let rawtyperef_of_tp: HashMap<Type,RawTypeRef> = task_tps
@@ -415,7 +417,7 @@ pub fn top_down_inplace<D: Domain, M: ProbabilisticModel>(
     // sort by arity as DC does to explore smaller things first (also sort  by name but thats just for determinism)
     prods.sort_by_key(|prod| {
         if let Prod::Prim(name, tp) = prod {
-            (tp.arity(&original_typeset),name.clone())
+            (Type::new(*tp, 0).arity(&original_typeset),name.clone())
         } else { unreachable!() }
     });
 
@@ -433,19 +435,19 @@ pub fn top_down_inplace<D: Domain, M: ProbabilisticModel>(
             let elapsed = tstart.elapsed().as_secs_f32();
             println!("{:?} @ {}s ({} processed/s)", stats, elapsed, ((stats.num_processed as f32) / elapsed) as i32 );
             
-            println!("Searching for {} solutions in range {lower_bound} <= ll <= {upper_bound}:", tp.tp(&original_typeset));
+            println!("Searching for <todo type> solutions in range {lower_bound} <= ll <= {upper_bound}:"); // tp.tp(&original_typeset));
             for task in tasks {
                 println!("\t{}", task.name)
             }
 
 
             let mut typeset = original_typeset.clone();
-            let tp = tp.instantiate(&mut typeset);
+            let tp =  typeset.instantiate(*tp);
 
             // if we want to wrap this in some lambdas and return it, then the outermost lambda should be the first type in
             // the list of arg types. This will be the *largest* de bruijn index within the body of the program, therefore
             // we should reverse the 
-            let mut env: VecDeque<TypeRef> = tp.iter_args(&typeset).collect();
+            let mut env: VecDeque<Type> = if tp.is_arrow(&typeset) { tp.iter_args(&typeset).collect() } else { VecDeque::new() };
             env.make_contiguous().reverse();
 
             let mut save_states: Vec<SaveState> = vec![];
@@ -521,7 +523,7 @@ pub fn top_down_inplace<D: Domain, M: ProbabilisticModel>(
 }
 
 #[inline(never)]
-fn check_correctness<D: Domain>(dsl: &DSL<D>, tasks: &Vec<Task<D>>, expanded: &PartialExpr, env: &VecDeque<TypeRef>, stats: &mut Stats, solved_buf: &mut Vec<(String, PartialExpr)>) -> Vec<String>{
+fn check_correctness<D: Domain>(dsl: &DSL<D>, tasks: &Vec<Task<D>>, expanded: &PartialExpr, env: &VecDeque<Type>, stats: &mut Stats, solved_buf: &mut Vec<(String, PartialExpr)>) -> Vec<String>{
     let mut solved_tasks: Vec<String> = vec![];
 
     // debug_assert!(expanded.expr.get(0).infer::<D>(&mut Context::empty(), &mut (env.clone())).is_ok());
