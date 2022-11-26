@@ -116,28 +116,41 @@ static SYMMETRY_RULES: Lazy<Vec<(usize,Symbol,Symbol)>> = Lazy::new(|| vec![
 ].into_iter().map(|(x,s1,s2)| (x,s1.into(),s2.into())).collect());
 
 impl<M: ProbabilisticModel> ProbabilisticModel for OrigamiModel<M> {
+    // #[inline(always)]
     fn expansion_unnormalized_ll(&self, prod: &Node, expr: &PartialExpr, hole: &Hole) -> NotNan<f32> {
         // if this is not the very first expansion, we forbid the fix_flip() operator
-        if expr.expr.len() != 0 && *prod == Node::Prim(self.fix_flip.clone())  {
-            return NotNan::new(f32::NEG_INFINITY).unwrap();
+        if expr.expr.len() != 0 {
+            if let Node::Prim(p) = prod  {
+                if *p == self.fix_flip {    
+                    return NotNan::new(f32::NEG_INFINITY).unwrap();
+                }
+            }
         }
 
         // if this is the very first expansion, we require it to be the fix_flip() operator
-        if expr.expr.len() == 0 && *prod != Node::Prim(self.fix_flip.clone())  {
-            return NotNan::new(f32::NEG_INFINITY).unwrap();
+        if expr.expr.len() == 0  {
+            if let Node::Prim(p) = prod  {
+                if *p != self.fix_flip {    
+                    return NotNan::new(f32::NEG_INFINITY).unwrap();
+                }
+            }
         }
 
         // if this is an expansion to the fix() operator, set it to 0
-        if *prod == Node::Prim(self.fix.clone()) {
-            return NotNan::new(f32::NEG_INFINITY).unwrap();
+        if let Node::Prim(p) = prod  {
+            if *p == self.fix {
+                return NotNan::new(f32::NEG_INFINITY).unwrap();
+            }
         }
         // if we previously expanded with fix_flip(), then force next expansion (ie first argument) to be $0
-        if expr.prev_prod == Some(Node::Prim(self.fix_flip.clone())) {
-            if let Node::Var(0) = prod {
-                // doesnt really matter what we set this to as long as its not -inf, itll get normalized to ll=0 and P=1 since all other productions will be -inf
-                return NotNan::new(-1.).unwrap();
-            } else {
-                return NotNan::new(f32::NEG_INFINITY).unwrap();
+        if let Some(Node::Prim(p)) = &expr.prev_prod {
+            if *p == self.fix_flip {
+                if let Node::Var(0) = prod {
+                    // doesnt really matter what we set this to as long as its not -inf, itll get normalized to ll=0 and P=1 since all other productions will be -inf
+                    return NotNan::new(-1.).unwrap();
+                } else {
+                    return NotNan::new(f32::NEG_INFINITY).unwrap();
+                }    
             }
         }
         // println!("{}", Expr::new(expr.expr.clone()).to_string_uncurried(expr.root.map(|u|u.into())));
@@ -207,6 +220,7 @@ impl UniformModel {
 }
 
 impl ProbabilisticModel for UniformModel {
+    // #[inline(always)]
     fn expansion_unnormalized_ll(&self, prod: &Node, _expr: &PartialExpr, _hole: &Hole) -> NotNan<f32> {
         match prod {
             Node::Var(_) => self.var_ll,
@@ -341,29 +355,18 @@ pub fn add_expansions<D: Domain, M: ProbabilisticModel>(expr: &mut PartialExpr, 
             Prod::Prim(p, raw_tp_ref) => (Node::Prim(p.clone()), expr.ctx.instantiate(*raw_tp_ref)),
             Prod::Var(i, tp_ref) => (Node::Var(*i), tp_ref.clone()),
         };
-        
-
-        // println!("considering: {} :: {}", prod, prod_tp);
-        // lightweight check for unification potential before doing the full clone and instantiation
-        // if !expr.ctx.might_unify(&hole_tp, &prod_tp.return_type(&expr.ctx)) {
-        //     continue
-        // }
-
-        // println!("passed might_unify()");
-
-        // full unification check
-        // println!("about to unify");
-        if !expr.ctx.unify(&hole_tp, &prod_tp.return_type(&expr.ctx)).is_ok() {
-            continue;
-        }
-        // println!("done unify");
-        // println!("passed unify()");
 
         let unnormalized_ll = model.expansion_unnormalized_ll(&node, expr, &hole);
 
         if unnormalized_ll == f32::NEG_INFINITY {
             continue // skip directly
         }
+
+        // full unification check
+        if !expr.ctx.unify(&hole_tp, &prod_tp.return_type(&expr.ctx)).is_ok() {
+            continue;
+        }
+        
 
         expansions_buf.push(Expansion::new(prod, unnormalized_ll))
     }
@@ -498,6 +501,7 @@ pub fn top_down_inplace<D: Domain, M: ProbabilisticModel>(
                     for task_name in solved_tasks {
                         println!("{} {} [ll={}] @ {}s: {}", "Solved".green(), task_name, expr.ll, tstart.elapsed().as_secs_f32(), expr);
                         println!("{:?}",stats);
+                        // panic!("done");
                     }
 
                 } else {
