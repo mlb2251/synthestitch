@@ -2,6 +2,7 @@ use clap::Parser;
 use itertools::Itertools;
 use rustc_hash::FxHashSet;
 use serde::Serialize;
+use core::panic;
 use std::{collections::{VecDeque}, fmt::Display};
 use ordered_float::NotNan;
 use std::time::{Duration,Instant};
@@ -10,16 +11,40 @@ use colorful::Colorful;
 use crate::task::*;
 
 /// Top-down synthesis
-#[derive(Parser, Debug, Serialize)]
+#[derive(Parser, Debug, Serialize, Clone)]
 #[clap(name = "Top-down synthesis")]
 pub struct TopDownConfig {
     /// program to track
     #[clap(long)]
-    pub t_track: Option<String>,
+    pub track: Option<String>,
 
-    /// min ll
+    /// never search below this ll (should be negative)
     #[clap(long)]
-    pub t_min_ll: Option<f32>,
+    pub min_ll: Option<f32>,
+
+    /// timeout in seconds for the search
+    #[clap(long)]
+    pub timeout: Option<u64>,
+
+    /// eval() timeout in milliseconds
+    #[clap(long, default_value = "10")]
+    pub eval_timeout: u64,
+
+    /// how wide the ll range is during each step of search
+    #[clap(long, default_value = "1.5")]
+    pub step: f32,
+
+    /// exit after just one solution
+    #[clap(long)]
+    pub one_soln: bool,
+
+    /// print out every processed item
+    #[clap(long)]
+    pub verbose_worklist: bool,
+       
+    /// print out every evaluation result
+    #[clap(long)]
+    pub verbose_eval: bool,
     
 }
 
@@ -33,11 +58,11 @@ struct Stats {
 
 #[derive(Debug,Clone)]
 pub struct PartialExpr {
-    expr: ExprSet,
-    ctx: TypeSet, // typing context so far
-    holes: Vec<Hole>, // holes so far
-    prev_prod: Option<Node>, // previous production rule used, this is a Var | Prim or it's None if this is empty / the root
-    ll: NotNan<f32>,
+    pub expr: ExprSet,
+    pub ctx: TypeSet, // typing context so far
+    pub holes: Vec<Hole>, // holes so far
+    pub prev_prod: Option<Node>, // previous production rule used, this is a Var | Prim or it's None if this is empty / the root
+    pub ll: NotNan<f32>,
 }
 
 impl PartialExpr {
@@ -81,13 +106,13 @@ pub trait ProbabilisticModel {
 /// it give it 0% probability for using it lower in the program. Specifically what original DC does is
 /// it forces the program to start with (lam (fix $0 ??)), then after the fact it may strip away that fix() operator if the function var
 /// was never used in the body of the lambda.
-/// For us fix_flip() is the DC style fixpoint operator, and we set fix() to P=0 as it's really just necessary internally to implement fix_flip().
-/// In our case, we dont force it to start with a fix_flip() but instead let that just be the usual distribution for the toplevel operator,
-/// but then if we ever try to expand into a fix_flip() and we're not at the top level then we set P=0 immediately.
+/// For us fix1() is the DC style fixpoint operator, and we set fix() to P=0 as it's really just necessary internally to implement fix1().
+/// In our case, we dont force it to start with a fix1() but instead let that just be the usual distribution for the toplevel operator,
+/// but then if we ever try to expand into a fix1() and we're not at the top level then we set P=0 immediately.
 /// Furthermore since the first argument of fix is always $0 we modify probabilities to force that too.
 pub struct OrigamiModel<M: ProbabilisticModel> {
     model: M,
-    fix_flip: Symbol,
+    fix1: Symbol,
     fix: Symbol
 }
 
@@ -105,8 +130,8 @@ impl<M: ProbabilisticModel> SymmetryRuleModel<M> {
 }
 
 impl<M: ProbabilisticModel> OrigamiModel<M> {
-    pub fn new(model: M, fix_flip: Symbol, fix: Symbol) -> Self {
-        OrigamiModel { model, fix_flip, fix }
+    pub fn new(model: M, fix1: Symbol, fix: Symbol) -> Self {
+        OrigamiModel { model, fix1, fix }
     }
 }
 
@@ -127,19 +152,19 @@ impl<M: ProbabilisticModel> ProbabilisticModel for SymmetryRuleModel<M> {
 impl<M: ProbabilisticModel> ProbabilisticModel for OrigamiModel<M> {
     // #[inline(always)]
     fn expansion_unnormalized_ll(&self, prod: &Node, expr: &PartialExpr, hole: &Hole) -> NotNan<f32> {
-        // if this is not the very first expansion, we forbid the fix_flip() operator
+        // if this is not the very first expansion, we forbid the fix1() operator
         if expr.expr.len() != 0 {
             if let Node::Prim(p) = prod  {
-                if *p == self.fix_flip {    
+                if *p == self.fix1 {    
                     return NotNan::new(f32::NEG_INFINITY).unwrap();
                 }
             }
         }
 
-        // if this is the very first expansion, we require it to be the fix_flip() operator
+        // if this is the very first expansion, we require it to be the fix1() operator
         if expr.expr.len() == 0  {
             if let Node::Prim(p) = prod  {
-                if *p != self.fix_flip {    
+                if *p != self.fix1 {    
                     return NotNan::new(f32::NEG_INFINITY).unwrap();
                 }
             }
@@ -151,9 +176,9 @@ impl<M: ProbabilisticModel> ProbabilisticModel for OrigamiModel<M> {
                 return NotNan::new(f32::NEG_INFINITY).unwrap();
             }
         }
-        // if we previously expanded with fix_flip(), then force next expansion (ie first argument) to be $0
+        // if we previously expanded with fix1(), then force next expansion (ie first argument) to be $0
         if let Some(Node::Prim(p)) = &expr.prev_prod {
-            if *p == self.fix_flip {
+            if *p == self.fix1 {
                 if let Node::Var(0) = prod {
                     // doesnt really matter what we set this to as long as its not -inf, itll get normalized to ll=0 and P=1 since all other productions will be -inf
                     return NotNan::new(-1.).unwrap();
@@ -164,13 +189,13 @@ impl<M: ProbabilisticModel> ProbabilisticModel for OrigamiModel<M> {
         }
         // println!("{}", Expr::new(expr.expr.clone()).to_string_uncurried(expr.root.map(|u|u.into())));
 
-        // we forbid the use of the very outermost argument if we used a fix_flip at the top level
+        // we forbid the use of the very outermost argument if we used a fix1 at the top level
         if let Node::Var(i) = prod {
             if *i+1 == hole.env.len() as i32 {
                 if expr.expr.len() != 0 {
                     if let Node::App(f,_) = expr.expr[0] {
                         if let Node::App(f,_) = expr.expr[f] {
-                            if expr.expr[f] == Node::Prim(self.fix_flip.clone()) {
+                            if expr.expr[f] == Node::Prim(self.fix1.clone()) {
                                 return NotNan::new(f32::NEG_INFINITY).unwrap();
                             }
                         }
@@ -387,12 +412,12 @@ pub fn add_expansions<D: Domain, M: ProbabilisticModel>(expr: &mut PartialExpr, 
     save_states.push(SaveState::new(expr, hole, expansions.len() - old_expansions_len));
 }
 
-pub fn top_down_inplace<D: Domain, M: ProbabilisticModel>(
-    model: M,
+pub fn top_down<D: Domain, M: ProbabilisticModel>(
+    model: &M,
     dsl: &DSL<D>,
     all_tasks: &[Task<D>],
     cfg: &TopDownConfig,
-) {
+) -> Vec<(String, PartialExpr)> {
 
     println!("DSL:");
     for entry in dsl.productions.values() {
@@ -403,9 +428,14 @@ pub fn top_down_inplace<D: Domain, M: ProbabilisticModel>(
 
     let tstart = Instant::now();
 
-    let budget_decr = NotNan::new(1.5).unwrap();
     let mut upper_bound = NotNan::new(0.).unwrap();
-    let mut lower_bound = upper_bound - budget_decr;
+    let mut lower_bound = upper_bound - cfg.step;
+
+    let track = cfg.track.as_ref().map(|track| {
+        // reparsing like this helps us catch errors in the track string and also
+        // lets us guarantee the same syntax in terms of parens and spacing and `lam` vs `lambda` etc
+        strip_lambdas(track)
+    });
 
     let mut original_typeset = TypeSet::empty();
 
@@ -424,15 +454,10 @@ pub fn top_down_inplace<D: Domain, M: ProbabilisticModel>(
         } else { unreachable!() }
     });
 
+    let mut solved_buf: Vec<(String, PartialExpr)> = vec![];
+
+    'search:
     loop {
-
-        if let Some(min_ll) =  cfg.t_min_ll {
-            if *lower_bound <= min_ll {
-                break
-            }
-        }
-
-
 
         for (tp, tasks) in task_tps.iter() {
             let elapsed = tstart.elapsed().as_secs_f32();
@@ -455,12 +480,18 @@ pub fn top_down_inplace<D: Domain, M: ProbabilisticModel>(
 
             let mut save_states: Vec<SaveState> = vec![];
             let mut expansions: Vec<Expansion> = vec![];
-            let mut solved_buf: Vec<(String, PartialExpr)> = vec![];
             let mut expr = PartialExpr::single_hole(tp.return_type(&typeset), env.clone(), typeset);
             add_expansions::<D,M>(&mut expr, &mut expansions, &mut save_states, &prods, &model, lower_bound);
 
             loop {
-                // println!("a");
+                if let Some(timeout) = cfg.timeout {
+                    if tstart.elapsed().as_secs() > timeout {
+                        println!("Timeout reached, stopping search");
+                        break 'search
+                    }
+                } 
+
+
                 // check if totally done
                 if save_states.is_empty() {
                     break 
@@ -483,11 +514,16 @@ pub fn top_down_inplace<D: Domain, M: ProbabilisticModel>(
 
                 stats.num_processed += 1;
 
-                if let Some(track) = &cfg.t_track {
+
+
+                if let Some(track) = &track {
                     if !track.starts_with(expr.to_string().split("??").next().unwrap()) {
+                        if cfg.verbose_worklist { println!("{}: {}","[pruned by track]".yellow(), expr ); }
                         continue;
                     }
                 }
+
+                if cfg.verbose_worklist { println!("Processing {} | holes: {}", expr, expr.holes.len()); }
 
                 if expr.holes.is_empty() {
                     // newly completed program
@@ -496,38 +532,46 @@ pub fn top_down_inplace<D: Domain, M: ProbabilisticModel>(
                     }
                     stats.num_finished += 1;
 
-                    let solved_tasks = check_correctness(dsl, tasks, &expr, &env, &mut stats, &mut solved_buf);
+                    let solved_tasks = check_correctness(cfg, dsl, tasks, &expr, &env, &mut stats);
 
                     for task_name in solved_tasks {
                         println!("{} {} [ll={}] @ {}s: {}", "Solved".green(), task_name, expr.ll, tstart.elapsed().as_secs_f32(), expr);
                         println!("{:?}",stats);
-                        // panic!("done");
+                        solved_buf.push((task_name, expr.clone()));
+                        if cfg.one_soln {
+                            break 'search
+                        }
                     }
 
                 } else {
                     // println!("{}: {} (ll={})", "expanding".yellow(), expr, expr.ll);
                     add_expansions::<D,M>(&mut expr, &mut expansions, &mut save_states, &prods, &model, lower_bound);
                 }
-
-                // println!("holes: {:?}", item.expr.holes);
-                // println!("ctx: {:?}", item.expr.ctx);
-
             }
 
 
         }
 
-        lower_bound -= budget_decr;
-        upper_bound -= budget_decr;
+        lower_bound -= cfg.step;
+        upper_bound -= cfg.step;
+
+        // global min ll cutoff
+        if let Some(min_ll) =  cfg.min_ll {
+            if *lower_bound < min_ll {
+                break
+            }
+        }
     }
 
     println!("{:?}", stats);
+
+    solved_buf
 
 
 }
 
 #[inline(never)]
-fn check_correctness<D: Domain>(dsl: &DSL<D>, tasks: &Vec<Task<D>>, expanded: &PartialExpr, env: &VecDeque<Type>, stats: &mut Stats, solved_buf: &mut Vec<(String, PartialExpr)>) -> Vec<String>{
+fn check_correctness<D: Domain>(cfg:&TopDownConfig, dsl: &DSL<D>, tasks: &Vec<Task<D>>, expanded: &PartialExpr, env: &VecDeque<Type>, stats: &mut Stats) -> Vec<String>{
     let mut solved_tasks: Vec<String> = vec![];
 
     // debug_assert!(expanded.expr.get(0).infer::<D>(&mut Context::empty(), &mut (env.clone())).is_ok());
@@ -539,19 +583,19 @@ fn check_correctness<D: Domain>(dsl: &DSL<D>, tasks: &Vec<Task<D>>, expanded: &P
             exec_env.reverse(); // for proper arg order
 
             // println!("about to exec");
-            match expanded.expr.get(0).eval(&exec_env, dsl, Some(Duration::from_millis(10))) {
+            match expanded.expr.get(0).eval(&exec_env, dsl, Some(Duration::from_millis(cfg.eval_timeout))) {
                 Ok(res) => {
                     stats.num_eval_ok += 1;
                     if res == io.output {
-                        // println!("{} {} {:?}", expanded, "=>".green(), res);
+                        if cfg.verbose_eval { println!("{} {} {:?}", expanded, "=>".green(), res); }
                     } else {
-                        // println!("{} {} {:?}", expanded, "=>".yellow(), res);
+                        if cfg.verbose_eval { println!("{} {} {:?} != {:?}", expanded, "=>".yellow(), res, io.output); }
                         solved = false;
                         break
                     }
                 },
-                Err(_) => {
-                    // println!("{} {} err: {}", "=>".red(), expanded, err);
+                Err(err) => {
+                    if cfg.verbose_eval { println!("{} {} err: {}", "=>".red(), expanded, err); }
                     stats.num_eval_err += 1;
                     solved = false;
                     break
@@ -579,4 +623,16 @@ fn logsumexp(x: NotNan<f32>, y: NotNan<f32>) -> NotNan<f32> {
     let big = std::cmp::max(x,y);
     let smol = std::cmp::min(x,y);
     big + (1. + (smol - big).exp()).ln()
+}
+
+/// Takes a string, parses it into an Expr, unwraps any lambdas, and prints it back out.
+/// This normalizes the string eg all `lambda` gets converted to `lam` etc, in addition to stripping
+/// away lambdas
+pub fn strip_lambdas(s: &str) -> String {
+    let mut e = ExprSet::empty(Order::ChildFirst, false, false);
+    let mut idx = e.parse_extend(s).unwrap();
+    while let Node::Lam(b) = e.get(idx).node() {
+        idx = *b;
+    }
+    e.get(idx).to_string()
 }

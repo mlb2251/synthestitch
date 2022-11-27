@@ -1,6 +1,6 @@
 use lambdas::*;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Task<D: Domain> {
     pub name: String,
     pub tp: SlowType,
@@ -13,7 +13,7 @@ impl<D:Domain> Task<D> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct IO<D: Domain> {
     pub inputs: Vec<Val<D>>,
     pub output: Val<D>

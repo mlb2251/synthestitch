@@ -1,0 +1,46 @@
+[
+    {
+        "task": "length int",
+        "soln": "(lambda (fix1 $0 (lambda (lambda (if (empty? $0) 0 (+ ($1 (cdr $0)) 1))))))"
+    },
+    {
+        "task": "countdown",
+        "soln": "(lambda (fix1 $0 (lambda (lambda (if (eq? $0 0) empty (cons (+ 1 $0) ($1 (- $0 1))))))))"
+    },
+    {
+        "task": "weird count",
+        "soln": "(lambda (fix1 $0 (lambda (lambda (if (eq? $0 0) empty (cons (- 0 $0) ($1 (+ 1 $0))))))))"
+    },
+    {
+        "task": "take every other",
+        "soln": "(lambda (fix1 $0 (lambda (lambda (if (empty? $0) empty (cons (car $0) ($1 (cdr (cdr $0)))))))))"
+    },
+    {
+        "task": "drop last element",
+        "soln": "(lambda (fix1 $0 (lambda (lambda (if (empty? (cdr $0)) empty (cons (car $0) ($1 (cdr $0))))))))"
+    },
+    {
+        "task": "stutter",
+        "soln": "(lambda (fix1 $0 (lambda (lambda (if (empty? $0) empty (cons (car $0) (cons (car $0) ($1 (cdr $0)))))))))"
+    },
+    {
+        "task": "sum",
+        "soln": "(lambda (fix1 $0 (lambda (lambda (if (empty? $0) 0 (+ ($1 (cdr $0)) (car $0)))))))"
+    },
+    {
+        "task": "append constant 0",
+        "soln": "(lambda (fix1 $0 (lambda (lambda (if (empty? $0) (cons 0 empty) (cons (car $0) ($1 (cdr $0))))))))"
+    },
+    {
+        "task": "map double",
+        "soln": "(lambda (fix1 $0 (lambda (lambda (if (empty? $0) empty (cons (+ (car $0) (car $0)) ($1 (cdr $0))))))))"
+    },
+    {
+        "task": "map increment",
+        "soln": "(lambda (fix1 $0 (lambda (lambda (if (empty? $0) empty (cons (+ (car $0) 1) ($1 (cdr $0))))))))"
+    },
+    {
+        "task": "map negation",
+        "soln": "(lambda (fix1 $0 (lambda (lambda (if (empty? $0) empty (cons (- 0 (car $0)) ($1 (cdr $0))))))))"
+    }
+]
