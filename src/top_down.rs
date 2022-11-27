@@ -1,7 +1,8 @@
 use clap::Parser;
 use itertools::Itertools;
+use rustc_hash::FxHashMap;
 use serde::Serialize;
-use std::{collections::{VecDeque}, fmt::Display};
+use std::{collections::{VecDeque, HashMap}, fmt::Display, default};
 use std::time::{Duration,Instant};
 use colorful::Colorful;
 use crate::*;
@@ -30,7 +31,11 @@ pub struct TopDownConfig {
     #[clap(long, default_value = "1.5")]
     pub step: f32,
 
-    /// exit after just one solution
+    /// how many solutions to find per task
+    #[clap(long, default_value = "5")]
+    pub num_solns: usize,
+
+    /// exit after very first solution to very first task that is solved
     #[clap(long)]
     pub one_soln: bool,
 
@@ -184,7 +189,7 @@ impl Expansion {
     }
 }
 
-pub fn add_expansions<D: Domain, M: ProbabilisticModel>(expr: &mut PartialExpr, expansions: &mut Vec<Expansion>, save_states: &mut Vec<SaveState>, prods: &[Prod], model: &M, lower_bound: NotNan<f32>) {
+pub fn add_expansions(expr: &mut PartialExpr, expansions: &mut Vec<Expansion>, save_states: &mut Vec<SaveState>, prods: &[Prod], model: &impl ProbabilisticModel, lower_bound: NotNan<f32>) {
     // println!("b");
     let hole: Hole  = expr.holes.pop().unwrap();
     let hole_tp = hole.tp; 
@@ -192,8 +197,6 @@ pub fn add_expansions<D: Domain, M: ProbabilisticModel>(expr: &mut PartialExpr, 
     let mut expansions_buf = vec![];
 
     let ctx_save_state = expr.ctx.save_state();
-    // println!("hole type: {}", hole_tp);
-    // println!("ctx: {:?}", expr.ctx);
 
     assert!(!hole_tp.is_arrow(&expr.ctx));
     // loop over all dsl entries and all variables in the env
@@ -214,7 +217,7 @@ pub fn add_expansions<D: Domain, M: ProbabilisticModel>(expr: &mut PartialExpr, 
             continue // skip directly
         }
 
-        // full unification check
+        // unification check
         if !expr.ctx.unify(&hole_tp, &prod_tp.return_type(&expr.ctx)).is_ok() {
             continue;
         }
@@ -244,7 +247,7 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
     dsl: &DSL<D>,
     all_tasks: &[Task<D>],
     cfg: &TopDownConfig,
-) -> Vec<(String, PartialExpr)> {
+) -> HashMap<TaskName, Vec<PartialExpr>> {
 
     println!("DSL:");
     for entry in dsl.productions.values() {
@@ -264,29 +267,38 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
         strip_lambdas(track)
     });
 
-    let mut original_typeset = TypeSet::empty();
+    let mut typeset = TypeSet::empty();
 
-    let task_tps: Vec<(Idx,Vec<Task<D>>)> = all_tasks.iter().map(|task| (task.tp.clone(), task.clone())).into_group_map()
-        .into_iter().map(|(tp,tasks)| (original_typeset.add_tp(&tp),tasks)).collect();
+    let mut unsolved_tasks: HashMap<Idx,Vec<Task<D>>> = all_tasks.iter().map(|task| (task.tp.clone(), task.clone())).into_group_map()
+        .into_iter().map(|(tp,tasks)| (typeset.add_tp(&tp),tasks)).collect();
 
     // let rawtyperef_of_tp: HashMap<Type,RawTypeRef> = task_tps
     //     .keys().cloned().chain(D::dsl_entries().map(|entry| entry.tp.clone()))
     //     .map(|tp| (tp.clone(),original_typeset.add_tp(&tp))).collect();
 
-    let mut prods: Vec<Prod> = dsl.productions.values().map(|entry| Prod::Prim(entry.name.clone(), original_typeset.add_tp(&entry.tp))).collect();
+    let mut prods: Vec<Prod> = dsl.productions.values().map(|entry| Prod::Prim(entry.name.clone(), typeset.add_tp(&entry.tp))).collect();
+    
     // sort by arity as DC does to explore smaller things first (also sort  by name but thats just for determinism)
     prods.sort_by_key(|prod| {
         if let Prod::Prim(name, tp) = prod {
-            (Type::new(*tp, 0).arity(&original_typeset),name.clone())
+            (Type::new(*tp, 0).arity(&typeset),name.clone())
         } else { unreachable!() }
     });
 
-    let mut solved_buf: Vec<(String, PartialExpr)> = vec![];
+    let mut solutions: HashMap<TaskName, Vec<PartialExpr>> = Default::default();
 
-    'search:
     loop {
+        if unsolved_tasks.is_empty() {
+            break;
+        }
+        for (tp, tasks) in unsolved_tasks.iter() {
+            if let Some(timeout) = cfg.timeout {
+                if tstart.elapsed().as_secs() > timeout {
+                    println!("Timeout reached, stopping search");
+                    break
+                }
+            }
 
-        for (tp, tasks) in task_tps.iter() {
             let elapsed = tstart.elapsed().as_secs_f32();
             println!("{:?} @ {}s ({} processed/s)", stats, elapsed, ((stats.num_processed as f32) / elapsed) as i32 );
             
@@ -295,89 +307,22 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
                 println!("\t{}", task.name)
             }
 
+            let solns = search_in_bounds(cfg, tp, &typeset, dsl, tasks, upper_bound, lower_bound, &prods, model, &track, &mut stats, &tstart);
 
-            let mut typeset = original_typeset.clone();
-            let tp =  typeset.instantiate(*tp);
-
-            // if we want to wrap this in some lambdas and return it, then the outermost lambda should be the first type in
-            // the list of arg types. This will be the *largest* de bruijn index within the body of the program, therefore
-            // we should reverse the 
-            let mut env: VecDeque<Type> = if tp.is_arrow(&typeset) { tp.iter_args(&typeset).collect() } else { VecDeque::new() };
-            env.make_contiguous().reverse();
-
-            let mut save_states: Vec<SaveState> = vec![];
-            let mut expansions: Vec<Expansion> = vec![];
-            let mut expr = PartialExpr::single_hole(tp.return_type(&typeset), env.clone(), typeset);
-            add_expansions::<D,M>(&mut expr, &mut expansions, &mut save_states, &prods, &model, lower_bound);
-
-            loop {
-                if let Some(timeout) = cfg.timeout {
-                    if tstart.elapsed().as_secs() > timeout {
-                        println!("Timeout reached, stopping search");
-                        break 'search
-                    }
-                } 
-
-
-                // check if totally done
-                if save_states.is_empty() {
-                    break 
-                }
-
-                // check if we need to pop our save state to pop a step upwards in DFS
-                if save_states.last().unwrap().num_expansions == 0 {
-                    save_states.pop().unwrap().apply_with_hole(&mut expr);
-                    continue
-                }
-
-                // reset to the current save state
-                save_states.last().unwrap().apply_without_hole(&mut expr);
-
-                // apply the expansion
-                expansions.pop().unwrap().apply(&mut expr, &save_states.last().unwrap().hole);
-                save_states.last_mut().unwrap().num_expansions -= 1;
-
-                assert!(expr.ll > lower_bound);
-
-                stats.num_processed += 1;
-
-
-
-                if let Some(track) = &track {
-                    if !track.starts_with(expr.to_string().split("??").next().unwrap()) {
-                        if cfg.verbose_worklist { println!("{}: {}","[pruned by track]".yellow(), expr ); }
-                        continue;
-                    }
-                }
-
-                if cfg.verbose_worklist { println!("Processing {} | holes: {}", expr, expr.holes.len()); }
-
-                if expr.holes.is_empty() {
-                    // newly completed program
-                    if expr.ll > upper_bound {
-                        continue; // too high probability - was enumerated on a previous pass of depth first search
-                    }
-                    stats.num_finished += 1;
-
-                    let solved_tasks = check_correctness(cfg, dsl, tasks, &expr, &env, &mut stats);
-
-                    for task_name in solved_tasks {
-                        println!("{} {} [ll={}] @ {}s: {}", "Solved".green(), task_name, expr.ll, tstart.elapsed().as_secs_f32(), expr);
-                        println!("{:?}",stats);
-                        solved_buf.push((task_name, expr.clone()));
-                        if cfg.one_soln {
-                            break 'search
-                        }
-                    }
-
-                } else {
-                    // println!("{}: {} (ll={})", "expanding".yellow(), expr, expr.ll);
-                    add_expansions::<D,M>(&mut expr, &mut expansions, &mut save_states, &prods, &model, lower_bound);
-                }
+            // integrate solutions into the overall solutions
+            for (task_name, new_task_solns) in solns {
+                let task_solns = solutions.entry(task_name).or_default();
+                task_solns.extend(new_task_solns);
+                task_solns.sort_by_key(|soln| -soln.ll);
+                task_solns.truncate(cfg.num_solns);
             }
-
-
         }
+
+        // remove tasks from unsolved_tasks if we have enough solutions for the task
+        unsolved_tasks.iter_mut().for_each(|(_,tasks)| tasks.retain(|task| {
+            !solutions.contains_key(&task.name) || solutions[&task.name].len() >= cfg.num_solns
+        }));
+        unsolved_tasks = unsolved_tasks.into_iter().filter(|(_,tasks)| !tasks.is_empty()).collect();
 
         lower_bound -= cfg.step;
         upper_bound -= cfg.step;
@@ -392,14 +337,96 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
 
     println!("{:?}", stats);
 
-    solved_buf
-
-
+    solutions
 }
 
+fn search_in_bounds<D: Domain>(cfg: &TopDownConfig, tp: &Idx, typeset: &TypeSet, dsl: &DSL<D>, tasks: &[Task<D>], upper_bound: NotNan<f32>, lower_bound: NotNan<f32>, prods: &[Prod], model: &impl ProbabilisticModel, track: &Option<String>, stats: &mut Stats, tstart: &Instant) -> HashMap<TaskName, Vec<PartialExpr>> {
+    let mut typeset = typeset.clone();
+    let tp =  typeset.instantiate(*tp);
+
+    // if we want to wrap this in some lambdas and return it, then the outermost lambda should be the first type in
+    // the list of arg types. This will be the *largest* de bruijn index within the body of the program, therefore
+    // we should reverse the 
+    let mut env: VecDeque<Type> = if tp.is_arrow(&typeset) { tp.iter_args(&typeset).collect() } else { VecDeque::new() };
+    env.make_contiguous().reverse();
+
+    let mut save_states: Vec<SaveState> = vec![];
+    let mut expansions: Vec<Expansion> = vec![];
+    let mut solutions: HashMap<TaskName, Vec<PartialExpr>> = Default::default();
+    let mut expr = PartialExpr::single_hole(tp.return_type(&typeset), env.clone(), typeset);
+    add_expansions(&mut expr, &mut expansions, &mut save_states, &prods, model, lower_bound);
+
+    loop {
+        if let Some(timeout) = cfg.timeout {
+            if tstart.elapsed().as_secs() > timeout {
+                return solutions
+            }
+        } 
+
+
+        // check if totally done
+        if save_states.is_empty() {
+            break
+        }
+
+        // check if we need to pop our save state to pop a step upwards in DFS
+        if save_states.last().unwrap().num_expansions == 0 {
+            save_states.pop().unwrap().apply_with_hole(&mut expr);
+            continue
+        }
+
+        // reset to the current save state
+        save_states.last().unwrap().apply_without_hole(&mut expr);
+
+        // apply the expansion
+        expansions.pop().unwrap().apply(&mut expr, &save_states.last().unwrap().hole);
+        save_states.last_mut().unwrap().num_expansions -= 1;
+
+        assert!(expr.ll > lower_bound);
+
+        stats.num_processed += 1;
+
+
+
+        if let Some(track) = &track {
+            if !track.starts_with(expr.to_string().split("??").next().unwrap()) {
+                if cfg.verbose_worklist { println!("{}: {}","[pruned by track]".yellow(), expr ); }
+                continue;
+            }
+        }
+
+        if cfg.verbose_worklist { println!("Processing {} | holes: {}", expr, expr.holes.len()); }
+
+        if expr.holes.is_empty() {
+            // newly completed program
+            if expr.ll > upper_bound {
+                continue; // too high probability - was enumerated on a previous pass of depth first search
+            }
+            stats.num_finished += 1;
+
+            let solved_tasks = check_correctness(cfg, dsl, tasks, &expr, &env, stats);
+
+            for task_name in solved_tasks {
+                println!("{} {} [ll={}] @ {}s: {}", "Solved".green(), task_name, expr.ll, tstart.elapsed().as_secs_f32(), expr);
+                println!("{:?}",stats);
+                solutions.entry(task_name).or_default().push(expr.clone());
+                if cfg.one_soln {
+                    break
+                }
+            }
+
+        } else {
+            // println!("{}: {} (ll={})", "expanding".yellow(), expr, expr.ll);
+            add_expansions(&mut expr, &mut expansions, &mut save_states, &prods, model, lower_bound);
+        }
+    }
+    solutions
+}
+
+
 #[inline(never)]
-fn check_correctness<D: Domain>(cfg:&TopDownConfig, dsl: &DSL<D>, tasks: &Vec<Task<D>>, expanded: &PartialExpr, env: &VecDeque<Type>, stats: &mut Stats) -> Vec<String>{
-    let mut solved_tasks: Vec<String> = vec![];
+fn check_correctness<D: Domain>(cfg:&TopDownConfig, dsl: &DSL<D>, tasks: &[Task<D>], expanded: &PartialExpr, env: &VecDeque<Type>, stats: &mut Stats) -> Vec<TaskName>{
+    let mut solved_tasks: Vec<TaskName> = vec![];
 
     // debug_assert!(expanded.expr.get(0).infer::<D>(&mut Context::empty(), &mut (env.clone())).is_ok());
     for task in tasks {

@@ -49,30 +49,9 @@ pub enum SynthChoice {
     BottomUp,
 }
 
-
-fn parse_tasks<D: Domain>(path: &dyn AsRef<Path>, dsl: &DSL<D>) -> Vec<Task<D>> {
+fn parse_tracked(path: &dyn AsRef<Path>) -> Vec<(TaskName,String)> {
     let json: serde_json::Value = from_reader(File::open(path).expect("file not found")).expect("json deserializing error");
-    let tasks: Vec<Task<D>> = json.as_array().unwrap().iter().map(|task| {
-        Task::new(
-            task["name"].as_str().unwrap().to_string(),
-            task["tp"].as_str().unwrap().parse().unwrap(),
-            task["ios"].as_array().unwrap().iter().map(|io| {
-                let inputs: Vec<String> = io.as_array().unwrap()[0].as_array().unwrap().iter().map(|i| i.as_str().unwrap().to_string()).collect();
-                let output: String = io.as_array().unwrap()[1].as_str().unwrap().to_string();
-                IO::new(
-                    // remove all spaces since prims cant have spaces within them
-                    inputs.iter().map(|i| dsl.val_of_prim(&i.replace(" ", "").into()).expect(&format!("failed to parse {i} as a Val"))).collect(),
-                    dsl.val_of_prim(&output.replace(" ", "").into()).unwrap()
-                )
-            }).collect(),
-        )
-    }).collect();
-    tasks
-}
-
-fn parse_tracked(path: &dyn AsRef<Path>) -> Vec<(String,String)> {
-    let json: serde_json::Value = from_reader(File::open(path).expect("file not found")).expect("json deserializing error");
-    let task_soln: Vec<(String,String)> = json.as_array().unwrap().iter().map(|entry| (entry["task"].as_str().unwrap().to_string(),entry["soln"].as_str().unwrap().to_string())).collect();
+    let task_soln: Vec<(TaskName,String)> = json.as_array().unwrap().iter().map(|entry| (entry["task"].as_str().unwrap().into(),entry["soln"].as_str().unwrap().to_string())).collect();
     task_soln
 }
 
@@ -101,26 +80,30 @@ fn run<D: Domain>(args: &Args) {
         let to_track = parse_tracked(track_all);
         let mut hits = vec![];
         let mut misses = vec![];
-        for (task_name, soln) in to_track {
-            println!("Tracking {} -> {}", task_name, soln);
+        for (task_name, target_soln) in to_track {
+            println!("Tracking {} -> {}", task_name, target_soln);
             let mut cfg = args.top_down_cfg.clone();
-            cfg.track = Some(soln.clone());
+            cfg.track = Some(target_soln.clone());
             cfg.one_soln = true;
             cfg.min_ll = Some(-100.);
             let solns = top_down(&model, &dsl, &tasks, &cfg);
             if solns.is_empty() {
-                misses.push((task_name, soln));
+                misses.push((task_name, target_soln));
             } else {
                 assert_eq!(solns.len(), 1);
-                assert_eq!(solns[0].1.to_string(), strip_lambdas(&soln));
-                hits.push((task_name, soln, solns[0].1.ll));
+                let (tname,tsolns) = solns.iter().next().unwrap();
+                assert_eq!(tname, &task_name);
+                assert_eq!(tsolns.len(), 1);
+                let soln = tsolns[0].clone();
+                assert_eq!(soln.to_string(), strip_lambdas(&target_soln));
+                hits.push((task_name, soln));
             }
         }
         println!("\n===SUMMARY===");
         println!("Hits: {}/{}", hits.len(), hits.len() + misses.len());
-        hits.sort_by_key(|(_,_,ll)| -*ll);
-        for (task_name, soln, ll) in hits {
-            println!("{} {} [ll={}]: {}", "Solved".green(), task_name, ll,  soln);
+        hits.sort_by_key(|(_,soln)| -soln.ll);
+        for (task_name, soln) in hits {
+            println!("{} {} [ll={}]: {}", "Solved".green(), task_name, soln.ll,  soln);
         }
         for (task_name, soln) in misses {
             println!("{} {} -> {}", "Miss".red(), task_name, soln);
