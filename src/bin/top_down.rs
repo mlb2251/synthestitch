@@ -7,10 +7,9 @@ use serde::Serialize;
 use std::path::PathBuf;
 use ordered_float::NotNan;
 use serde_json::de::from_reader;
-use lambdas::*;
+use synthestitch::*;
 use lambdas::domains::simple::*;
 use lambdas::domains::prim_lists::*;
-use synthestitch::task::*;
 
 
 
