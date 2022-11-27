@@ -55,6 +55,8 @@ struct Stats {
     num_eval_err: usize,
     num_processed: usize,
     num_finished: usize,
+    num_solved_once: usize,
+    num_never_solved: usize,
 }
 
 #[derive(Debug,Clone)]
@@ -300,12 +302,12 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
             }
 
             let elapsed = tstart.elapsed().as_secs_f32();
-            println!("{:?} @ {}s ({} processed/s)", stats, elapsed, ((stats.num_processed as f32) / elapsed) as i32 );
             
             println!("Searching for <todo type> solutions in range {lower_bound} <= ll <= {upper_bound}:"); // tp.tp(&original_typeset));
             for task in tasks {
                 println!("\t{}", task.name)
             }
+            println!("{:?} @ {}s ({} processed/s)", stats, elapsed, ((stats.num_processed as f32) / elapsed) as i32 );
 
             let solns = search_in_bounds(cfg, tp, &typeset, dsl, tasks, upper_bound, lower_bound, &prods, model, &track, &mut stats, &tstart);
 
@@ -316,6 +318,10 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
                 task_solns.sort_by_key(|soln| -soln.ll);
                 task_solns.truncate(cfg.num_solns);
             }
+            stats.num_never_solved = unsolved_tasks.iter().map(|(_,tasks)| tasks.iter().filter(|task|
+                !solutions.contains_key(&task.name) || solutions[&task.name].is_empty()
+            ).count()).sum::<usize>();
+            stats.num_solved_once = all_tasks.len() - stats.num_never_solved;    
         }
 
         // remove tasks from unsolved_tasks if we have enough solutions for the task
@@ -385,8 +391,6 @@ fn search_in_bounds<D: Domain>(cfg: &TopDownConfig, tp: &Idx, typeset: &TypeSet,
         assert!(expr.ll > lower_bound);
 
         stats.num_processed += 1;
-
-
 
         if let Some(track) = &track {
             if !track.starts_with(expr.to_string().split("??").next().unwrap()) {
