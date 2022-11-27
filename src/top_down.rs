@@ -1,7 +1,8 @@
 use clap::Parser;
 use itertools::Itertools;
+use rustc_hash::FxHashSet;
 use serde::Serialize;
-use std::{collections::{VecDeque}, fmt::Display};
+use std::{collections::{VecDeque, HashSet}, fmt::Display};
 use ordered_float::NotNan;
 use std::time::{Duration,Instant};
 use lambdas::*;
@@ -91,29 +92,37 @@ pub struct OrigamiModel<M: ProbabilisticModel> {
     fix: Symbol
 }
 
+pub struct SymmetryRuleModel<M: ProbabilisticModel> {
+    model: M,
+    rules: FxHashSet<(usize,Symbol,Symbol)>
+}
+
+impl<M: ProbabilisticModel> SymmetryRuleModel<M> {
+    pub fn new(model: M, rules: &[(usize,&str,&str)]) -> SymmetryRuleModel<M> {
+        SymmetryRuleModel { model, rules: rules.iter().map(|(a,b,c)| (*a,(*b).into(),(*c).into()) ).collect() }
+    }
+
+}
+
 impl<M: ProbabilisticModel> OrigamiModel<M> {
     pub fn new(model: M, fix_flip: Symbol, fix: Symbol) -> Self {
         OrigamiModel { model, fix_flip, fix }
     }
 }
 
-static SYMMETRY_RULES: Lazy<Vec<(usize,Symbol,Symbol)>> = Lazy::new(|| vec![
-    (0,"head","cons"), // arg_idx, parent, child
-    (0,"head","[]"),
-    (0,"tail","cons"),
-    (0,"tail","[]"),
-    (0,"+","0"),
-    (1,"+","0"),
-    (1,"-","0"),
-    (0,"+","+"),
-    (0,"*","*"),
-    (0,"*","0"),
-    (1,"*","0"),
-    (0,"*","1"),
-    (1,"*","1"),
-    (0,"is_empty","cons"),
-    (0,"is_empty","[]"),
-].into_iter().map(|(x,s1,s2)| (x,s1.into(),s2.into())).collect());
+impl<M: ProbabilisticModel> ProbabilisticModel for SymmetryRuleModel<M> {
+    fn expansion_unnormalized_ll(&self, prod: &Node, expr: &PartialExpr, hole: &Hole) -> NotNan<f32> {
+        // dreamcoders symmetry breaking rules
+        if let Node::Prim(p) = prod {
+            if let Some((Node::Prim(parent), arg_idx)) = parent_and_arg_idx(expr, hole) {
+                if self.rules.contains(&(arg_idx,parent.clone(),p.clone())) {
+                    return NotNan::new(f32::NEG_INFINITY).unwrap();
+                }
+            }
+        }
+        self.model.expansion_unnormalized_ll(prod, expr, hole)
+    }
+}
 
 impl<M: ProbabilisticModel> ProbabilisticModel for OrigamiModel<M> {
     // #[inline(always)]
@@ -170,15 +179,6 @@ impl<M: ProbabilisticModel> ProbabilisticModel for OrigamiModel<M> {
             }
         }
 
-        // dreamcoders symmetry breaking rules
-        if let Node::Prim(p) = prod {
-            if let Some((Node::Prim(parent), arg_idx)) = parent_and_arg_idx(expr, hole) {
-                if SYMMETRY_RULES.contains(&(arg_idx,parent,p.clone())) {
-                    return NotNan::new(f32::NEG_INFINITY).unwrap();
-                }
-            }
-        }
-
 
         // default
         self.model.expansion_unnormalized_ll(prod, expr, hole)
@@ -188,7 +188,7 @@ impl<M: ProbabilisticModel> ProbabilisticModel for OrigamiModel<M> {
 
 /// who is the parent of the hole and which child are we of it. Doesnt handle higher order stuff.
 /// bc we didnt need that to replicate the dreamcoder symmetry rules
-fn parent_and_arg_idx(expr: &PartialExpr, hole: &Hole) -> Option<(Node, usize)> {
+fn parent_and_arg_idx<'a>(expr: &'a PartialExpr, hole: &Hole) -> Option<(&'a Node, usize)> {
     if hole.parent.is_none() {
         return None
     }
@@ -200,7 +200,7 @@ fn parent_and_arg_idx(expr: &PartialExpr, hole: &Hole) -> Option<(Node, usize)> 
                 arg_idx += 1;
                 func = f;
             } else {
-                return Some((expr.expr[func].clone(), arg_idx));
+                return Some((&expr.expr[func], arg_idx));
             }
         }
     } else {
@@ -221,6 +221,7 @@ impl UniformModel {
 
 impl ProbabilisticModel for UniformModel {
     // #[inline(always)]
+    #[inline(never)]
     fn expansion_unnormalized_ll(&self, prod: &Node, _expr: &PartialExpr, _hole: &Hole) -> NotNan<f32> {
         match prod {
             Node::Var(_) => self.var_ll,

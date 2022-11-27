@@ -90,7 +90,23 @@ fn uniform_top_down<D: Domain>(tasks: &[Task<D>], dsl: &DSL<D>, args: &Args) {
 
     top_down_inplace::<D,_>(
         OrigamiModel::new(
-            UniformModel::new(NotNan::new(0.).unwrap(),NotNan::new(0.).unwrap()),
+            SymmetryRuleModel::new(
+                    UniformModel::new(NotNan::new(0.).unwrap(),NotNan::new(0.).unwrap()),
+                     &[(0,"head","cons"), // arg_idx, parent, child
+                            (0,"head","[]"),
+                            (0,"tail","cons"),
+                            (0,"tail","[]"),
+                            (0,"+","0"),
+                            (1,"+","0"),
+                            (1,"-","0"),
+                            (0,"+","+"),
+                            (0,"*","*"),
+                            (0,"*","0"),
+                            (1,"*","0"),
+                            (0,"*","1"),
+                            (1,"*","1"),
+                            (0,"is_empty","cons"),
+                            (0,"is_empty","[]")]),
             "fix_flip".into(),
             "fix".into()
         ),
