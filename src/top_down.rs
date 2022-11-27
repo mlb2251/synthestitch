@@ -2,7 +2,7 @@ use clap::Parser;
 use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use serde::Serialize;
-use std::{collections::{VecDeque, HashMap}, fmt::Display, default};
+use std::{collections::{VecDeque, HashMap}, fmt::Display, default, sync::Mutex};
 use std::time::{Duration,Instant};
 use colorful::Colorful;
 use crate::*;
@@ -51,12 +51,37 @@ pub struct TopDownConfig {
 
 #[derive(Clone, Debug, Default)]
 struct Stats {
-    num_eval_ok: usize,
-    num_eval_err: usize,
-    num_processed: usize,
-    num_finished: usize,
+    local: LocalStats,
     num_solved_once: usize,
     num_never_solved: usize,
+}
+
+#[derive(Clone, Debug, Default)]
+struct LocalStats {
+    num_processed: usize,
+    num_finished: usize,
+    num_eval_ok: usize,
+    num_eval_err: usize,
+}
+
+impl LocalStats {
+    fn new() -> Self {
+        Self::default()
+    }
+    fn add(&mut self, other: &Self) {
+        self.num_processed += other.num_processed;
+        self.num_finished += other.num_finished;
+        self.num_eval_ok += other.num_eval_ok;
+        self.num_eval_err += other.num_eval_err;
+}
+}
+
+struct Shared {
+    cfg: TopDownConfig,
+    typeset: TypeSet,
+    prods: Vec<Prod>,
+    track: Option<String>,
+    tstart: Instant
 }
 
 #[derive(Debug,Clone)]
@@ -289,6 +314,14 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
 
     let mut solutions: HashMap<TaskName, Vec<PartialExpr>> = Default::default();
 
+    let shared = Shared {
+        cfg: cfg.clone(),
+        typeset,
+        prods,
+        track,
+        tstart,
+    };
+
     loop {
         if unsolved_tasks.is_empty() {
             break;
@@ -307,9 +340,11 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
             for task in tasks {
                 println!("\t{}", task.name)
             }
-            println!("{:?} @ {}s ({} processed/s)", stats, elapsed, ((stats.num_processed as f32) / elapsed) as i32 );
 
-            let solns = search_in_bounds(cfg, tp, &typeset, dsl, tasks, upper_bound, lower_bound, &prods, model, &track, &mut stats, &tstart);
+            println!("{:?} @ {}s ({} processed/s)", stats, elapsed, ((stats.local.num_processed as f32) / elapsed) as i32 );
+
+            let (solns, local_stats) = search_in_bounds(tp, &tasks, &dsl, model, upper_bound, lower_bound, &shared);
+            stats.local.add(&local_stats);
 
             // integrate solutions into the overall solutions
             for (task_name, new_task_solns) in solns {
@@ -321,7 +356,7 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
             stats.num_never_solved = unsolved_tasks.iter().map(|(_,tasks)| tasks.iter().filter(|task|
                 !solutions.contains_key(&task.name) || solutions[&task.name].is_empty()
             ).count()).sum::<usize>();
-            stats.num_solved_once = all_tasks.len() - stats.num_never_solved;    
+            stats.num_solved_once = all_tasks.len() - stats.num_never_solved;        
         }
 
         // remove tasks from unsolved_tasks if we have enough solutions for the task
@@ -346,8 +381,13 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
     solutions
 }
 
-fn search_in_bounds<D: Domain>(cfg: &TopDownConfig, tp: &Idx, typeset: &TypeSet, dsl: &DSL<D>, tasks: &[Task<D>], upper_bound: NotNan<f32>, lower_bound: NotNan<f32>, prods: &[Prod], model: &impl ProbabilisticModel, track: &Option<String>, stats: &mut Stats, tstart: &Instant) -> HashMap<TaskName, Vec<PartialExpr>> {
-    let mut typeset = typeset.clone();
+    // tp, tasks
+    // dsl: DSL<D>,
+    // model: &impl ProbabilisticModel,
+
+
+fn search_in_bounds<D: Domain>(tp: &Idx, tasks: &[Task<D>], dsl: &DSL<D>, model: &impl ProbabilisticModel, upper_bound: NotNan<f32>, lower_bound: NotNan<f32>, shared: &Shared) -> (HashMap<TaskName, Vec<PartialExpr>>, LocalStats) {
+    let mut typeset = shared.typeset.clone();
     let tp =  typeset.instantiate(*tp);
 
     // if we want to wrap this in some lambdas and return it, then the outermost lambda should be the first type in
@@ -360,12 +400,14 @@ fn search_in_bounds<D: Domain>(cfg: &TopDownConfig, tp: &Idx, typeset: &TypeSet,
     let mut expansions: Vec<Expansion> = vec![];
     let mut solutions: HashMap<TaskName, Vec<PartialExpr>> = Default::default();
     let mut expr = PartialExpr::single_hole(tp.return_type(&typeset), env.clone(), typeset);
-    add_expansions(&mut expr, &mut expansions, &mut save_states, &prods, model, lower_bound);
+    add_expansions(&mut expr, &mut expansions, &mut save_states, &shared.prods, model, lower_bound);
+
+    let mut local_stats = LocalStats::default();
 
     loop {
-        if let Some(timeout) = cfg.timeout {
-            if tstart.elapsed().as_secs() > timeout {
-                return solutions
+        if let Some(timeout) = shared.cfg.timeout {
+            if shared.tstart.elapsed().as_secs() > timeout {
+                break
             }
         } 
 
@@ -390,46 +432,46 @@ fn search_in_bounds<D: Domain>(cfg: &TopDownConfig, tp: &Idx, typeset: &TypeSet,
 
         assert!(expr.ll > lower_bound);
 
-        stats.num_processed += 1;
+        local_stats.num_processed += 1;
 
-        if let Some(track) = &track {
+        if let Some(track) = &shared.track {
             if !track.starts_with(expr.to_string().split("??").next().unwrap()) {
-                if cfg.verbose_worklist { println!("{}: {}","[pruned by track]".yellow(), expr ); }
+                if shared.cfg.verbose_worklist { println!("{}: {}","[pruned by track]".yellow(), expr ); }
                 continue;
             }
         }
 
-        if cfg.verbose_worklist { println!("Processing {} | holes: {}", expr, expr.holes.len()); }
+        if shared.cfg.verbose_worklist { println!("Processing {} | holes: {}", expr, expr.holes.len()); }
 
         if expr.holes.is_empty() {
             // newly completed program
             if expr.ll > upper_bound {
                 continue; // too high probability - was enumerated on a previous pass of depth first search
             }
-            stats.num_finished += 1;
+            local_stats.num_finished += 1;
 
-            let solved_tasks = check_correctness(cfg, dsl, tasks, &expr, &env, stats);
+            let solved_tasks = check_correctness(&shared, dsl, tasks, &expr, &env, &mut local_stats);
 
             for task_name in solved_tasks {
-                println!("{} {} [ll={}] @ {}s: {}", "Solved".green(), task_name, expr.ll, tstart.elapsed().as_secs_f32(), expr);
-                println!("{:?}",stats);
+                println!("{} {} [ll={}] @ {}s: {}", "Solved".green(), task_name, expr.ll, shared.tstart.elapsed().as_secs_f32(), expr);
+                println!("local: {:?}",local_stats);
                 solutions.entry(task_name).or_default().push(expr.clone());
-                if cfg.one_soln {
+                if shared.cfg.one_soln {
                     break
                 }
             }
 
         } else {
             // println!("{}: {} (ll={})", "expanding".yellow(), expr, expr.ll);
-            add_expansions(&mut expr, &mut expansions, &mut save_states, &prods, model, lower_bound);
+            add_expansions(&mut expr, &mut expansions, &mut save_states, &shared.prods, model, lower_bound);
         }
     }
-    solutions
+    (solutions, local_stats)
 }
 
 
 #[inline(never)]
-fn check_correctness<D: Domain>(cfg:&TopDownConfig, dsl: &DSL<D>, tasks: &[Task<D>], expanded: &PartialExpr, env: &VecDeque<Type>, stats: &mut Stats) -> Vec<TaskName>{
+fn check_correctness<D: Domain>(shared:&Shared, dsl: &DSL<D>, tasks: &[Task<D>], expanded: &PartialExpr, env: &VecDeque<Type>, local_stats: &mut LocalStats) -> Vec<TaskName> {
     let mut solved_tasks: Vec<TaskName> = vec![];
 
     // debug_assert!(expanded.expr.get(0).infer::<D>(&mut Context::empty(), &mut (env.clone())).is_ok());
@@ -441,20 +483,20 @@ fn check_correctness<D: Domain>(cfg:&TopDownConfig, dsl: &DSL<D>, tasks: &[Task<
             exec_env.reverse(); // for proper arg order
 
             // println!("about to exec");
-            match expanded.expr.get(0).eval(&exec_env, dsl, Some(Duration::from_millis(cfg.eval_timeout))) {
+            match expanded.expr.get(0).eval(&exec_env, dsl, Some(Duration::from_millis(shared.cfg.eval_timeout))) {
                 Ok(res) => {
-                    stats.num_eval_ok += 1;
+                    local_stats.num_eval_ok += 1;
                     if res == io.output {
-                        if cfg.verbose_eval { println!("{} {} {:?}", expanded, "=>".green(), res); }
+                        if shared.cfg.verbose_eval { println!("{} {} {:?}", expanded, "=>".green(), res); }
                     } else {
-                        if cfg.verbose_eval { println!("{} {} {:?} != {:?}", expanded, "=>".yellow(), res, io.output); }
+                        if shared.cfg.verbose_eval { println!("{} {} {:?} != {:?}", expanded, "=>".yellow(), res, io.output); }
                         solved = false;
                         break
                     }
                 },
                 Err(err) => {
-                    if cfg.verbose_eval { println!("{} {} err: {}", "=>".red(), expanded, err); }
-                    stats.num_eval_err += 1;
+                    if shared.cfg.verbose_eval { println!("{} {} err: {}", "=>".red(), expanded, err); }
+                    local_stats.num_eval_err += 1;
                     solved = false;
                     break
                 }
@@ -465,7 +507,7 @@ fn check_correctness<D: Domain>(cfg:&TopDownConfig, dsl: &DSL<D>, tasks: &[Task<
             solved_tasks.push(task.name.clone());
         }
     }
-    solved_tasks
+   solved_tasks
 }
 
 
