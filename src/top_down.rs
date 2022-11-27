@@ -221,7 +221,6 @@ impl UniformModel {
 
 impl ProbabilisticModel for UniformModel {
     // #[inline(always)]
-    #[inline(never)]
     fn expansion_unnormalized_ll(&self, prod: &Node, _expr: &PartialExpr, _hole: &Hole) -> NotNan<f32> {
         match prod {
             Node::Var(_) => self.var_ll,
