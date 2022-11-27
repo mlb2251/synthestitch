@@ -2,13 +2,12 @@ use clap::Parser;
 use itertools::Itertools;
 use rustc_hash::FxHashSet;
 use serde::Serialize;
-use std::{collections::{VecDeque, HashSet}, fmt::Display};
+use std::{collections::{VecDeque}, fmt::Display};
 use ordered_float::NotNan;
 use std::time::{Duration,Instant};
 use lambdas::*;
 use colorful::Colorful;
 use crate::task::*;
-use once_cell::sync::Lazy;
 
 /// Top-down synthesis
 #[derive(Parser, Debug, Serialize)]
@@ -99,7 +98,8 @@ pub struct SymmetryRuleModel<M: ProbabilisticModel> {
 
 impl<M: ProbabilisticModel> SymmetryRuleModel<M> {
     pub fn new(model: M, rules: &[(usize,&str,&str)]) -> SymmetryRuleModel<M> {
-        SymmetryRuleModel { model, rules: rules.iter().map(|(a,b,c)| (*a,(*b).into(),(*c).into()) ).collect() }
+        let rules = rules.iter().map(|(a,b,c)| (*a,(*b).into(),(*c).into()) ).collect();
+        SymmetryRuleModel { model, rules  }
     }
 
 }
