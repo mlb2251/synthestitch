@@ -535,11 +535,11 @@ fn check_correctness<D: Domain>(dsl: &DSL<D>, tasks: &Vec<Task<D>>, expanded: &P
         let mut solved = true;
         for io in task.ios.iter() {
             // probably excessively much cloning and such here lol
-            let mut exec_env: Vec<LazyVal<D>> = io.inputs.iter().map(|v| LazyVal::new_strict(v.clone())).collect();
+            let mut exec_env: Env<D> = io.inputs.clone().into();
             exec_env.reverse(); // for proper arg order
 
             // println!("about to exec");
-            match expanded.expr.get(0).eval(&mut exec_env.clone(), dsl, Some(Duration::from_millis(10))) {
+            match expanded.expr.get(0).eval(&exec_env, dsl, Some(Duration::from_millis(10))) {
                 Ok(res) => {
                     stats.num_eval_ok += 1;
                     if res == io.output {
