@@ -1,7 +1,7 @@
 use clap::Parser;
 use itertools::Itertools;
 use serde::Serialize;
-use std::{collections::{VecDeque, HashMap},sync::{Mutex, Arc}, thread};
+use std::{collections::{VecDeque, HashMap},sync::{Mutex, Arc}, thread, fmt::{Display, Formatter}};
 use std::time::{Duration,Instant};
 use colorful::Colorful;
 use crate::*;
@@ -337,6 +337,10 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
         tstart,
     });
 
+    let crit = shared.crit.lock().unwrap();
+    println!("{}", crit);
+    drop(crit);
+
     if cfg.threads == 1 {
         // Single threaded
         search_worker(Arc::clone(&shared), &typeset);
@@ -393,6 +397,26 @@ pub struct CriticalMultithreadData<D: Domain> {
     solutions: HashMap<TaskName, Vec<PartialExpr>>,
 }
 
+impl<D: Domain> Display for CriticalMultithreadData<D> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Stats: {:?}\n", self.stats)?;
+        write!(f, "Still enumerating:\n")?;
+        for (_, tasks) in self.work_item_generator.unsolved_tasks.iter() {
+            write!(f, "\t{}: {} tasks\n", tasks.first().unwrap().tp, tasks.len())?;
+        }
+        write!(f, "Solutions:\n")?;
+        for (name, solns) in self.solutions.iter() {
+            if solns.is_empty() {
+                write!(f, "\t{}: [{}]\n", name, "no solns".red())?;
+            } else {
+                let num_solns = format!("{} solns", solns.len()).green();
+                write!(f,"\t{}: [{}] [ll={}] {}\n", name, num_solns, solns.first().unwrap().ll, solns.first().unwrap())?;
+            }
+        }
+        Ok(())
+    }
+}
+
 impl<D: Domain> Iterator for WorkItemGenerator<D> {
     type Item = WorkItem<D>;
     fn next(&mut self) -> Option<Self::Item> {
@@ -447,7 +471,7 @@ fn search_worker<D: Domain, M: ProbabilisticModel>(shared: Arc<Shared<D,M>>, typ
 
 
 fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, shared: &Shared<D,M>, typeset: &TypeSet) {
-    println!("[Thread {:?}] Searching for <todo type> solutions in range {} <= ll <= {}:", thread::current().id(), work_item.lower_bound, work_item.upper_bound); // tp.tp(&original_typeset));
+    println!("[Thread {:?}] Searching for {} solutions in range {} <= ll <= {}:", thread::current().id(), work_item.tasks[0].tp, work_item.lower_bound, work_item.upper_bound); // tp.tp(&original_typeset));
     for task in &work_item.tasks {
         println!("\t{}", task.name)
     }
@@ -557,7 +581,7 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, s
                 }
 
                 println!("{} {} [ll={}] @ {}s: {}", "Solved".green(), task_name, expr.ll, shared.tstart.elapsed().as_secs_f32(), expr);
-                println!("Solved at: {:?}", crit.stats);
+                println!("{}",crit);
 
 
                 drop(crit);
