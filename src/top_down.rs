@@ -1,8 +1,7 @@
 use clap::Parser;
 use itertools::Itertools;
-use rustc_hash::FxHashMap;
 use serde::Serialize;
-use std::{collections::{VecDeque, HashMap}, fmt::Display, default, sync::Mutex};
+use std::{collections::{VecDeque, HashMap},sync::{Mutex, Arc}, thread};
 use std::time::{Duration,Instant};
 use colorful::Colorful;
 use crate::*;
@@ -22,6 +21,10 @@ pub struct TopDownConfig {
     /// timeout in seconds for the search
     #[clap(long)]
     pub timeout: Option<u64>,
+
+    /// num threads to use
+    #[clap(long, short='t', default_value = "1")]
+    pub threads: usize,
 
     /// eval() timeout in milliseconds
     #[clap(long, default_value = "10")]
@@ -49,7 +52,7 @@ pub struct TopDownConfig {
     
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 struct Stats {
     local: LocalStats,
     num_solved_once: usize,
@@ -65,19 +68,24 @@ struct LocalStats {
 }
 
 impl LocalStats {
-    fn add(&mut self, other: &Self) {
+    fn transfer(&mut self, other: &mut Self) {
         self.num_processed += other.num_processed;
+        other.num_processed = 0;
         self.num_finished += other.num_finished;
+        other.num_finished = 0;
         self.num_eval_ok += other.num_eval_ok;
+        other.num_eval_ok = 0;
         self.num_eval_err += other.num_eval_err;
+        other.num_eval_err = 0;
     }
 }
 
+#[derive(Debug)]
 struct Shared<D: Domain, M: ProbabilisticModel> {
+    crit: Mutex<CriticalMultithreadData<D>>,
     cfg: TopDownConfig,
     dsl: DSL<D>,
     model: M,
-    typeset: TypeSet,
     prods: Vec<Prod>,
     track: Option<String>,
     tstart: Instant
@@ -280,12 +288,13 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
         println!("\t{} :: {}", entry.name, entry.tp);
     }
 
-    let mut stats = Stats::default();
+    let stats = Stats {
+        local: Default::default(),
+        num_solved_once: 0,
+        num_never_solved: all_tasks.len(),
+    };
 
     let tstart = Instant::now();
-
-    let mut upper_bound = NotNan::new(0.).unwrap();
-    let mut lower_bound = upper_bound - cfg.step;
 
     let track = cfg.track.as_ref().map(|track| {
         // reparsing like this helps us catch errors in the track string and also
@@ -293,17 +302,14 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
         strip_lambdas(track)
     });
 
+    let solutions: HashMap<TaskName, Vec<PartialExpr>> = all_tasks.iter().map(|task| (task.name.clone(), vec![])).collect();
+    
     let mut typeset = TypeSet::empty();
 
-    let mut unsolved_tasks: HashMap<Idx,Vec<Task<D>>> = all_tasks.iter().map(|task| (task.tp.clone(), task.clone())).into_group_map()
+    let unsolved_tasks: Vec<(Idx,Vec<Task<D>>)> = all_tasks.iter().map(|task| (task.tp.clone(), task.clone())).into_group_map()
         .into_iter().map(|(tp,tasks)| (typeset.add_tp(&tp),tasks)).collect();
 
-    // let rawtyperef_of_tp: HashMap<Type,RawTypeRef> = task_tps
-    //     .keys().cloned().chain(D::dsl_entries().map(|entry| entry.tp.clone()))
-    //     .map(|tp| (tp.clone(),original_typeset.add_tp(&tp))).collect();
-
     let mut prods: Vec<Prod> = dsl.productions.values().map(|entry| Prod::Prim(entry.name.clone(), typeset.add_tp(&entry.tp))).collect();
-    
     // sort by arity as DC does to explore smaller things first (also sort  by name but thats just for determinism)
     prods.sort_by_key(|prod| {
         if let Prod::Prim(name, tp) = prod {
@@ -311,93 +317,142 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
         } else { unreachable!() }
     });
 
-    let mut solutions: HashMap<TaskName, Vec<PartialExpr>> = Default::default();
-
-    let shared = Shared {
-        cfg: cfg.clone(),
-        dsl: dsl.clone(),
-        model: model.clone(),
-        typeset,
-        prods,
-        track,
+    let work_item_generator = WorkItemGenerator {
+        unsolved_tasks,
+        cfg_min_ll: cfg.min_ll,
+        cfg_step: cfg.step,
+        curr: 0,
+        curr_upper_bound: NotNan::new(0.).unwrap(),
+        cfg_timeout: cfg.timeout.clone(),
         tstart,
     };
 
-    loop {
-        if unsolved_tasks.is_empty() {
-            break;
-        }
-        for (tp, tasks) in unsolved_tasks.iter() {
-            if let Some(timeout) = cfg.timeout {
-                if tstart.elapsed().as_secs() > timeout {
-                    println!("Timeout reached, stopping search");
-                    break
-                }
+    let shared = Arc::new(Shared {
+        crit: Mutex::new(CriticalMultithreadData { stats, work_item_generator, solutions }),
+        cfg: cfg.clone(),
+        dsl: dsl.clone(),
+        model: model.clone(),
+        prods,
+        track,
+        tstart,
+    });
+
+    if cfg.threads == 1 {
+        // Single threaded
+        search_worker(Arc::clone(&shared), &typeset);
+    } else {
+        // Multithreaded
+        thread::scope(|scope| {
+            let mut handles = vec![];
+            for _ in 0..cfg.threads {
+                // clone the Arcs to have copies for this thread
+                let shared = Arc::clone(&shared);
+                let typeset = typeset.clone();
+                handles.push(scope.spawn(move || {
+                    search_worker(shared, &typeset);
+                }));
             }
+        });
+    }
 
-            let elapsed = tstart.elapsed().as_secs_f32();
-            
-            println!("Searching for <todo type> solutions in range {lower_bound} <= ll <= {upper_bound}:"); // tp.tp(&original_typeset));
-            for task in tasks {
-                println!("\t{}", task.name)
-            }
+    let shared = Arc::try_unwrap(shared).unwrap();
 
-            println!("{:?} @ {}s ({} processed/s)", stats, elapsed, ((stats.local.num_processed as f32) / elapsed) as i32 );
-
-            let work_item = WorkItem {
-                tp: *tp,
-                tasks: tasks.clone(),
-                upper_bound,
-                lower_bound,
-            };
-
-            let (solns, local_stats) = search_in_bounds(&work_item, &shared);
-            stats.local.add(&local_stats);
-
-            // integrate solutions into the overall solutions
-            for (task_name, new_task_solns) in solns {
-                let task_solns = solutions.entry(task_name).or_default();
-                task_solns.extend(new_task_solns);
-                task_solns.sort_by_key(|soln| -soln.ll);
-                task_solns.truncate(cfg.num_solns);
-            }
-            stats.num_never_solved = unsolved_tasks.iter().map(|(_,tasks)| tasks.iter().filter(|task|
-                !solutions.contains_key(&task.name) || solutions[&task.name].is_empty()
-            ).count()).sum::<usize>();
-            stats.num_solved_once = all_tasks.len() - stats.num_never_solved;        
-        }
-
-        // remove tasks from unsolved_tasks if we have enough solutions for the task
-        unsolved_tasks.iter_mut().for_each(|(_,tasks)| tasks.retain(|task| {
-            !solutions.contains_key(&task.name) || solutions[&task.name].len() >= cfg.num_solns
-        }));
-        unsolved_tasks = unsolved_tasks.into_iter().filter(|(_,tasks)| !tasks.is_empty()).collect();
-
-        lower_bound -= cfg.step;
-        upper_bound -= cfg.step;
-
-        // global min ll cutoff
-        if let Some(min_ll) =  cfg.min_ll {
-            if *lower_bound < min_ll {
-                break
-            }
+    if let Some(timeout) = shared.cfg.timeout {
+        if shared.tstart.elapsed().as_secs() > timeout {
+            println!("Timeout: stopped search at {} seconds", shared.tstart.elapsed().as_secs());
         }
     }
 
-    println!("{:?}", stats);
-
-    solutions
+    let crit = shared.crit.lock().unwrap();
+    println!("Final Stats: {:?}", crit.stats);
+    crit.solutions.clone()
 }
 
 pub struct WorkItem<D: Domain> {
     tp: Idx,
     tasks: Vec<Task<D>>,
     upper_bound: NotNan<f32>,
-    lower_bound: NotNan<f32>
+    lower_bound: NotNan<f32>,
 }
 
-fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, shared: &Shared<D,M>) -> (HashMap<TaskName, Vec<PartialExpr>>, LocalStats) {
-    let mut typeset = shared.typeset.clone();
+#[derive(Debug)]
+pub struct WorkItemGenerator<D: Domain> {
+    unsolved_tasks: Vec<(Idx,Vec<Task<D>>)>,
+    cfg_min_ll: Option<f32>,
+    cfg_step: f32,
+    curr: usize, // index into unsolved_tasks
+    curr_upper_bound: NotNan<f32>,
+    cfg_timeout: Option<u64>,
+    tstart: Instant
+}
+
+#[derive(Debug)]
+pub struct CriticalMultithreadData<D: Domain> {
+    stats: Stats,
+    work_item_generator: WorkItemGenerator<D>,
+    solutions: HashMap<TaskName, Vec<PartialExpr>>,
+}
+
+impl<D: Domain> Iterator for WorkItemGenerator<D> {
+    type Item = WorkItem<D>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.unsolved_tasks.is_empty() {
+            return None
+        }
+        if let Some(timeout) = self.cfg_timeout {
+            if self.tstart.elapsed().as_secs() > timeout {
+                return None
+            }
+        }
+
+        if self.curr >= self.unsolved_tasks.len() {
+            self.curr = 0;
+            self.curr_upper_bound -= self.cfg_step;
+            
+            // global min ll cutoff check
+            if let Some(min_ll) = self.cfg_min_ll {
+                if *self.curr_upper_bound < min_ll {
+                    return None
+                }
+            }
+        }
+
+        let (tp, tasks) = &self.unsolved_tasks[self.curr];
+        let work_item = WorkItem {
+            tp: *tp,
+            tasks: tasks.clone(),
+            upper_bound: self.curr_upper_bound,
+            lower_bound: self.curr_upper_bound - self.cfg_step,
+        };
+        self.curr += 1;
+        Some(work_item)
+    }
+}
+
+
+
+fn search_worker<D: Domain, M: ProbabilisticModel>(shared: Arc<Shared<D,M>>, typeset: &TypeSet) {
+    loop {
+        let mut crit = shared.crit.lock().unwrap();
+        let work_item = crit.work_item_generator.next();
+        let elapsed = shared.tstart.elapsed().as_secs_f32();
+        println!("{:?} @ {}s ({} processed/s)", crit.stats, elapsed, ((crit.stats.local.num_processed as f32) / elapsed) as i32 );
+        drop(crit);
+        match work_item {
+            Some(work_item) => search_in_bounds(&work_item, &*shared, typeset),
+            None => return
+        }
+    }
+}
+
+
+fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, shared: &Shared<D,M>, typeset: &TypeSet) {
+    println!("Searching for <todo type> solutions in range {} <= ll <= {}:", work_item.lower_bound, work_item.upper_bound); // tp.tp(&original_typeset));
+    for task in &work_item.tasks {
+        println!("\t{}", task.name)
+    }
+
+    let mut typeset = typeset.clone();
     let tp =  typeset.instantiate(work_item.tp);
 
     // if we want to wrap this in some lambdas and return it, then the outermost lambda should be the first type in
@@ -408,7 +463,7 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, s
 
     let mut save_states: Vec<SaveState> = vec![];
     let mut expansions: Vec<Expansion> = vec![];
-    let mut solutions: HashMap<TaskName, Vec<PartialExpr>> = Default::default();
+    // let mut solutions: HashMap<TaskName, Vec<PartialExpr>> = Default::default();
     let mut expr = PartialExpr::single_hole(tp.return_type(&typeset), env.clone(), typeset);
     add_expansions(&mut expr, &mut expansions, &mut save_states, &shared.prods, &shared.model, work_item.lower_bound);
 
@@ -420,7 +475,6 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, s
                 break
             }
         } 
-
 
         // check if totally done
         if save_states.is_empty() {
@@ -463,11 +517,30 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, s
             let solved_tasks = check_correctness(&shared, &work_item.tasks, &expr, &env, &mut local_stats);
 
             for task_name in solved_tasks {
+                let mut crit = shared.crit.lock().unwrap();
+                crit.stats.local.transfer(&mut local_stats);
                 println!("{} {} [ll={}] @ {}s: {}", "Solved".green(), task_name, expr.ll, shared.tstart.elapsed().as_secs_f32(), expr);
-                println!("local: {:?}",local_stats);
-                solutions.entry(task_name).or_default().push(expr.clone());
+                println!("Solved at: {:?}", crit.stats);
+                let solutions = crit.solutions.get_mut(&task_name).unwrap();
+                solutions.push(expr.clone());
+                solutions.sort_by_key(|soln| -soln.ll);
+                solutions.truncate(shared.cfg.num_solns);
+                
+                if solutions.len() == 1 {
+                    crit.stats.num_never_solved -= 1;
+                    crit.stats.num_solved_once += 1;
+                } else if solutions.len() == shared.cfg.num_solns {
+                    if let Some(idx) = crit.work_item_generator.unsolved_tasks.iter().position(|(tp, _)| tp == &work_item.tp) {
+                        crit.work_item_generator.unsolved_tasks[idx].1.retain(|task| task.name != task_name);
+                        if crit.work_item_generator.unsolved_tasks[idx].1.is_empty() {
+                            crit.work_item_generator.unsolved_tasks.remove(idx);
+                        }
+                    }
+                }
+
+                drop(crit);
                 if shared.cfg.one_soln {
-                    break
+                    return
                 }
             }
 
@@ -476,7 +549,10 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, s
             add_expansions(&mut expr, &mut expansions, &mut save_states, &shared.prods, &shared.model, work_item.lower_bound);
         }
     }
-    (solutions, local_stats)
+
+    let mut crit = shared.crit.lock().unwrap();
+    crit.stats.local.transfer(&mut local_stats);
+    drop(crit);
 }
 
 

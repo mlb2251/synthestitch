@@ -5,7 +5,7 @@ use ordered_float::NotNan;
 
 
 
-pub trait ProbabilisticModel: Clone {
+pub trait ProbabilisticModel: Clone + Send + Sync + std::fmt::Debug {
     fn expansion_unnormalized_ll(&self, prod: &Node, expr: &PartialExpr, hole: &Hole) -> NotNan<f32>;
 
     fn likelihood(_e: &Expr) -> NotNan<f32> {
@@ -24,14 +24,14 @@ pub trait ProbabilisticModel: Clone {
 /// In our case, we dont force it to start with a fix1() but instead let that just be the usual distribution for the toplevel operator,
 /// but then if we ever try to expand into a fix1() and we're not at the top level then we set P=0 immediately.
 /// Furthermore since the first argument of fix is always $0 we modify probabilities to force that too.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct OrigamiModel<M: ProbabilisticModel> {
     model: M,
     fix1: Symbol,
     fix: Symbol
 }
 
-#[derive(Clone)]
+#[derive(Clone,Debug)]
 pub struct SymmetryRuleModel<M: ProbabilisticModel> {
     model: M,
     rules: FxHashSet<(usize,Symbol,Symbol)>
@@ -149,7 +149,7 @@ fn parent_and_arg_idx<'a>(expr: &'a PartialExpr, hole: &Hole) -> Option<(&'a Nod
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone,Debug)]
 pub struct UniformModel {
     var_ll: NotNan<f32>,
     prim_ll: NotNan<f32>,
