@@ -65,15 +65,12 @@ struct LocalStats {
 }
 
 impl LocalStats {
-    fn new() -> Self {
-        Self::default()
-    }
     fn add(&mut self, other: &Self) {
         self.num_processed += other.num_processed;
         self.num_finished += other.num_finished;
         self.num_eval_ok += other.num_eval_ok;
         self.num_eval_err += other.num_eval_err;
-}
+    }
 }
 
 struct Shared {
