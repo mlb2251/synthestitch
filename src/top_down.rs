@@ -73,8 +73,10 @@ impl LocalStats {
     }
 }
 
-struct Shared {
+struct Shared<D: Domain, M: ProbabilisticModel> {
     cfg: TopDownConfig,
+    dsl: DSL<D>,
+    model: M,
     typeset: TypeSet,
     prods: Vec<Prod>,
     track: Option<String>,
@@ -313,6 +315,8 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
 
     let shared = Shared {
         cfg: cfg.clone(),
+        dsl: dsl.clone(),
+        model: model.clone(),
         typeset,
         prods,
         track,
@@ -340,7 +344,14 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
 
             println!("{:?} @ {}s ({} processed/s)", stats, elapsed, ((stats.local.num_processed as f32) / elapsed) as i32 );
 
-            let (solns, local_stats) = search_in_bounds(tp, &tasks, &dsl, model, upper_bound, lower_bound, &shared);
+            let work_item = WorkItem {
+                tp: *tp,
+                tasks: tasks.clone(),
+                upper_bound,
+                lower_bound,
+            };
+
+            let (solns, local_stats) = search_in_bounds(&work_item, &shared);
             stats.local.add(&local_stats);
 
             // integrate solutions into the overall solutions
@@ -378,14 +389,16 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
     solutions
 }
 
-    // tp, tasks
-    // dsl: DSL<D>,
-    // model: &impl ProbabilisticModel,
+pub struct WorkItem<D: Domain> {
+    tp: Idx,
+    tasks: Vec<Task<D>>,
+    upper_bound: NotNan<f32>,
+    lower_bound: NotNan<f32>
+}
 
-
-fn search_in_bounds<D: Domain>(tp: &Idx, tasks: &[Task<D>], dsl: &DSL<D>, model: &impl ProbabilisticModel, upper_bound: NotNan<f32>, lower_bound: NotNan<f32>, shared: &Shared) -> (HashMap<TaskName, Vec<PartialExpr>>, LocalStats) {
+fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, shared: &Shared<D,M>) -> (HashMap<TaskName, Vec<PartialExpr>>, LocalStats) {
     let mut typeset = shared.typeset.clone();
-    let tp =  typeset.instantiate(*tp);
+    let tp =  typeset.instantiate(work_item.tp);
 
     // if we want to wrap this in some lambdas and return it, then the outermost lambda should be the first type in
     // the list of arg types. This will be the *largest* de bruijn index within the body of the program, therefore
@@ -397,7 +410,7 @@ fn search_in_bounds<D: Domain>(tp: &Idx, tasks: &[Task<D>], dsl: &DSL<D>, model:
     let mut expansions: Vec<Expansion> = vec![];
     let mut solutions: HashMap<TaskName, Vec<PartialExpr>> = Default::default();
     let mut expr = PartialExpr::single_hole(tp.return_type(&typeset), env.clone(), typeset);
-    add_expansions(&mut expr, &mut expansions, &mut save_states, &shared.prods, model, lower_bound);
+    add_expansions(&mut expr, &mut expansions, &mut save_states, &shared.prods, &shared.model, work_item.lower_bound);
 
     let mut local_stats = LocalStats::default();
 
@@ -427,7 +440,7 @@ fn search_in_bounds<D: Domain>(tp: &Idx, tasks: &[Task<D>], dsl: &DSL<D>, model:
         expansions.pop().unwrap().apply(&mut expr, &save_states.last().unwrap().hole);
         save_states.last_mut().unwrap().num_expansions -= 1;
 
-        assert!(expr.ll > lower_bound);
+        assert!(expr.ll > work_item.lower_bound);
 
         local_stats.num_processed += 1;
 
@@ -442,12 +455,12 @@ fn search_in_bounds<D: Domain>(tp: &Idx, tasks: &[Task<D>], dsl: &DSL<D>, model:
 
         if expr.holes.is_empty() {
             // newly completed program
-            if expr.ll > upper_bound {
+            if expr.ll > work_item.upper_bound {
                 continue; // too high probability - was enumerated on a previous pass of depth first search
             }
             local_stats.num_finished += 1;
 
-            let solved_tasks = check_correctness(&shared, dsl, tasks, &expr, &env, &mut local_stats);
+            let solved_tasks = check_correctness(&shared, &work_item.tasks, &expr, &env, &mut local_stats);
 
             for task_name in solved_tasks {
                 println!("{} {} [ll={}] @ {}s: {}", "Solved".green(), task_name, expr.ll, shared.tstart.elapsed().as_secs_f32(), expr);
@@ -460,7 +473,7 @@ fn search_in_bounds<D: Domain>(tp: &Idx, tasks: &[Task<D>], dsl: &DSL<D>, model:
 
         } else {
             // println!("{}: {} (ll={})", "expanding".yellow(), expr, expr.ll);
-            add_expansions(&mut expr, &mut expansions, &mut save_states, &shared.prods, model, lower_bound);
+            add_expansions(&mut expr, &mut expansions, &mut save_states, &shared.prods, &shared.model, work_item.lower_bound);
         }
     }
     (solutions, local_stats)
@@ -468,7 +481,7 @@ fn search_in_bounds<D: Domain>(tp: &Idx, tasks: &[Task<D>], dsl: &DSL<D>, model:
 
 
 #[inline(never)]
-fn check_correctness<D: Domain>(shared:&Shared, dsl: &DSL<D>, tasks: &[Task<D>], expanded: &PartialExpr, env: &VecDeque<Type>, local_stats: &mut LocalStats) -> Vec<TaskName> {
+fn check_correctness<D: Domain, M: ProbabilisticModel>(shared: &Shared<D,M>, tasks: &[Task<D>], expanded: &PartialExpr, env: &VecDeque<Type>, local_stats: &mut LocalStats) -> Vec<TaskName> {
     let mut solved_tasks: Vec<TaskName> = vec![];
 
     // debug_assert!(expanded.expr.get(0).infer::<D>(&mut Context::empty(), &mut (env.clone())).is_ok());
@@ -480,7 +493,7 @@ fn check_correctness<D: Domain>(shared:&Shared, dsl: &DSL<D>, tasks: &[Task<D>],
             exec_env.reverse(); // for proper arg order
 
             // println!("about to exec");
-            match expanded.expr.get(0).eval(&exec_env, dsl, Some(Duration::from_millis(shared.cfg.eval_timeout))) {
+            match expanded.expr.get(0).eval(&exec_env, &shared.dsl, Some(Duration::from_millis(shared.cfg.eval_timeout))) {
                 Ok(res) => {
                     local_stats.num_eval_ok += 1;
                     if res == io.output {
