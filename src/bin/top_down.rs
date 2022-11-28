@@ -86,15 +86,13 @@ fn run<D: Domain>(args: &Args) {
             cfg.track = Some(target_soln.clone());
             cfg.one_soln = true;
             cfg.min_ll = Some(-100.);
+            cfg.threads = 1;
             let solns = top_down(&model, &dsl, &tasks, &cfg);
-            if solns.is_empty() {
+            if solns[&task_name].is_empty() {
                 misses.push((task_name, target_soln));
             } else {
-                assert_eq!(solns.len(), 1);
-                let (tname,tsolns) = solns.iter().next().unwrap();
-                assert_eq!(tname, &task_name);
-                assert_eq!(tsolns.len(), 1);
-                let soln = tsolns[0].clone();
+                assert_eq!(solns[&task_name].len(), 1);
+                let soln = solns[&task_name][0].clone();
                 assert_eq!(soln.to_string(), strip_lambdas(&target_soln));
                 hits.push((task_name, soln));
             }

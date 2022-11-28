@@ -447,7 +447,7 @@ fn search_worker<D: Domain, M: ProbabilisticModel>(shared: Arc<Shared<D,M>>, typ
 
 
 fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, shared: &Shared<D,M>, typeset: &TypeSet) {
-    println!("Searching for <todo type> solutions in range {} <= ll <= {}:", work_item.lower_bound, work_item.upper_bound); // tp.tp(&original_typeset));
+    println!("[Thread {:?}] Searching for <todo type> solutions in range {} <= ll <= {}:", thread::current().id(), work_item.lower_bound, work_item.upper_bound); // tp.tp(&original_typeset));
     for task in &work_item.tasks {
         println!("\t{}", task.name)
     }
@@ -474,7 +474,19 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, s
             if shared.tstart.elapsed().as_secs() > timeout {
                 break
             }
-        } 
+        }
+
+        if local_stats.num_processed % 1_000_000 == 0 {
+            let crit = shared.crit.lock().unwrap();
+            // if our `tp` is no longer in `unsolved_tasks`, we should check to see if our upper bound (ie the best we can do) is
+            // lower than or equal to all the lls of found solutions.
+            if crit.work_item_generator.unsolved_tasks.iter().position(|(tp, _)| tp == &work_item.tp).is_none()
+                && work_item.tasks.iter().all(|task| crit.solutions.get(&task.name).unwrap().last().unwrap().ll >= work_item.upper_bound)
+            {
+                println!("[Thread {:?}] {}", thread::current().id(), "detected unnecessary enumeration, exiting search".yellow());
+                break
+            }
+        }
 
         // check if totally done
         if save_states.is_empty() {
@@ -519,24 +531,34 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, s
             for task_name in solved_tasks {
                 let mut crit = shared.crit.lock().unwrap();
                 crit.stats.local.transfer(&mut local_stats);
-                println!("{} {} [ll={}] @ {}s: {}", "Solved".green(), task_name, expr.ll, shared.tstart.elapsed().as_secs_f32(), expr);
-                println!("Solved at: {:?}", crit.stats);
+
+                if crit.solutions.get(&task_name).unwrap().len() == 1 {
+                    crit.stats.num_never_solved -= 1;
+                    crit.stats.num_solved_once += 1;
+                }
+
                 let solutions = crit.solutions.get_mut(&task_name).unwrap();
+
                 solutions.push(expr.clone());
                 solutions.sort_by_key(|soln| -soln.ll);
                 solutions.truncate(shared.cfg.num_solns);
-                
-                if solutions.len() == 1 {
-                    crit.stats.num_never_solved -= 1;
-                    crit.stats.num_solved_once += 1;
-                } else if solutions.len() == shared.cfg.num_solns {
-                    if let Some(idx) = crit.work_item_generator.unsolved_tasks.iter().position(|(tp, _)| tp == &work_item.tp) {
-                        crit.work_item_generator.unsolved_tasks[idx].1.retain(|task| task.name != task_name);
-                        if crit.work_item_generator.unsolved_tasks[idx].1.is_empty() {
-                            crit.work_item_generator.unsolved_tasks.remove(idx);
+
+                if solutions.len() == shared.cfg.num_solns {
+                    if let Some(i) = crit.work_item_generator.unsolved_tasks.iter().position(|(tp, _)| tp == &work_item.tp) {
+                        if let Some(j) = crit.work_item_generator.unsolved_tasks[i].1.iter().position(|task| task.name == task_name) {
+                            crit.work_item_generator.unsolved_tasks[i].1.remove(j);
+                            println!("{}: {}", "Done enumerating for task".green(), task_name);
+                            if crit.work_item_generator.unsolved_tasks[i].1.is_empty() {
+                                println!("{}: <type>", "Done enumerating for type".green());
+                                crit.work_item_generator.unsolved_tasks.remove(i);
+                            }    
                         }
                     }
                 }
+
+                println!("{} {} [ll={}] @ {}s: {}", "Solved".green(), task_name, expr.ll, shared.tstart.elapsed().as_secs_f32(), expr);
+                println!("Solved at: {:?}", crit.stats);
+
 
                 drop(crit);
                 if shared.cfg.one_soln {
