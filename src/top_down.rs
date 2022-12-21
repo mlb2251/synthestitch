@@ -6,6 +6,7 @@ use std::time::{Duration,Instant};
 use colorful::Colorful;
 use crate::*;
 
+
 /// Top-down synthesis
 #[derive(Parser, Debug, Serialize, Clone)]
 #[clap(name = "Top-down synthesis")]
@@ -120,7 +121,7 @@ impl Hole {
 }
 
 
-
+#[derive(Debug,Clone)]
 pub struct SaveState {
     hole: Hole, // hole that was expanded
     ctx_save_state: (usize,usize), // result of ctx.save_state() right before this expansion happened
@@ -137,16 +138,22 @@ impl SaveState {
     pub fn new(expr: &PartialExpr, hole: Hole, num_expansions: usize) -> SaveState {
         SaveState { hole, ctx_save_state: expr.ctx.save_state(), prev_prod: expr.prev_prod.clone(), ll: expr.ll, hole_len: expr.holes.len(), expr_len: expr.expr.len(), num_expansions }
     }
-    pub fn reinsert_hole(self, expr: &mut PartialExpr) {
-        expr.holes.push(self.hole);
+}
+
+impl ThreadState {
+    pub fn pop_state(&mut self) {
+        let state = self.save_states.pop().unwrap();
+        self.expr.holes.push(state.hole);
     }
-    pub fn reset_to_save_state(&self, expr: &mut PartialExpr) {
-        expr.ctx.load_state(self.ctx_save_state);
-        expr.prev_prod = self.prev_prod.clone();
-        expr.ll = self.ll;
-        expr.holes.truncate(self.hole_len);
-        expr.expr.truncate(self.expr_len);
-        if let Some(parent) = self.hole.parent {
+    pub fn reset_to_save_state(&mut self) {
+        let expr = &mut self.expr;
+        let state = self.save_states.last().unwrap();
+        expr.ctx.load_state(state.ctx_save_state);
+        expr.prev_prod = state.prev_prod.clone();
+        expr.ll = state.ll;
+        expr.holes.truncate(state.hole_len);
+        expr.expr.truncate(state.expr_len);
+        if let Some(parent) = state.hole.parent {
             expr.expr.get_mut(parent).unexpand_right();
         }
     }
@@ -167,8 +174,9 @@ impl Expansion {
     pub fn new(prod: Prod, ll: NotNan<f32>) -> Expansion {
         Expansion { prod, ll }
     }
-    pub fn apply(self, expr: &mut PartialExpr, hole: &Hole) {
-
+    pub fn apply(self, state: &mut ThreadState) {
+        let hole = &state.save_states.last().unwrap().hole;
+        let expr = &mut state.expr;
         // perform unification - 
         // todo its weird and silly that we repeat this here
         // instantiate if this wasnt a variable
@@ -222,57 +230,58 @@ impl Expansion {
     }
 }
 
-pub fn add_expansions(expr: &mut PartialExpr, expansions: &mut Vec<Expansion>, save_states: &mut Vec<SaveState>, prods: &[Prod], model: &impl ProbabilisticModel, lower_bound: NotNan<f32>) {
+pub fn add_expansions(state: &mut ThreadState, prods: &[Prod], model: &impl ProbabilisticModel, lower_bound: NotNan<f32>) {
     // println!("b");
-    let hole: Hole  = expr.holes.pop().unwrap();
+    let hole: Hole  = state.expr.holes.pop().unwrap();
     let hole_tp = hole.tp; 
 
     let mut expansions_buf = vec![];
 
-    let ctx_save_state = expr.ctx.save_state();
+    let ctx_save_state = state.expr.ctx.save_state();
 
-    assert!(!hole_tp.is_arrow(&expr.ctx));
+    assert!(!hole_tp.is_arrow(&state.expr.ctx));
     // loop over all dsl entries and all variables in the env
     for prod in
         prods.iter().cloned()
         .chain(hole.env.iter().enumerate().map(|(i,tp)| Prod::Var(i as i32,*tp)))
     {
-        expr.ctx.load_state(ctx_save_state);
+        state.expr.ctx.load_state(ctx_save_state);
 
         let (node,prod_tp) = match &prod {
-            Prod::Prim(p, raw_tp_ref) => (Node::Prim(p.clone()), expr.ctx.instantiate(*raw_tp_ref)),
+            Prod::Prim(p, raw_tp_ref) => (Node::Prim(p.clone()), state.expr.ctx.instantiate(*raw_tp_ref)),
             Prod::Var(i, tp_ref) => (Node::Var(*i), tp_ref.clone()),
         };
 
-        let unnormalized_ll = model.expansion_unnormalized_ll(&node, expr, &hole);
+        let unnormalized_ll = model.expansion_unnormalized_ll(&node, &state.expr, &hole);
 
         if unnormalized_ll == f32::NEG_INFINITY {
             continue // skip directly
         }
 
         // unification check
-        if !expr.ctx.unify(&hole_tp, &prod_tp.return_type(&expr.ctx)).is_ok() {
+        if !state.expr.ctx.unify(&hole_tp, &prod_tp.return_type(&state.expr.ctx)).is_ok() {
             continue;
         }
         
 
         expansions_buf.push(Expansion::new(prod, unnormalized_ll))
     }
-    expr.ctx.load_state(ctx_save_state);
+    state.expr.ctx.load_state(ctx_save_state);
 
     
     // normalize
     let ll_total = expansions_buf.iter().map(|exp| exp.ll).reduce(logsumexp).unwrap_or(NotNan::new(f32::NEG_INFINITY).unwrap());
     for exp in expansions_buf.iter_mut() {
-        exp.ll = expr.ll + (exp.ll - ll_total)
+        exp.ll = state.expr.ll + (exp.ll - ll_total)
     }
 
     // LOWER BOUND: keep ones that are higher than the lower bound in probability
     // expansions_buf.retain(|exp| exp.ll > lower_bound); // cant easily fit a skip() in here but thats harmless so its ok
-    let old_expansions_len = expansions.len();
-    expansions.extend(expansions_buf.drain(..).filter(|exp| exp.ll > lower_bound));
+    let old_expansions_len = state.expansions.len();
+    state.expansions.extend(expansions_buf.drain(..).filter(|exp| exp.ll > lower_bound));
 
-    save_states.push(SaveState::new(expr, hole, expansions.len() - old_expansions_len));
+    let num_expansions = state.expansions.len() - old_expansions_len;
+    state.save_states.push(SaveState::new(&state.expr, hole, num_expansions));
 }
 
 pub fn top_down<D: Domain, M: ProbabilisticModel>(
@@ -491,6 +500,11 @@ fn search_worker<D: Domain, M: ProbabilisticModel>(shared: Arc<Shared<D,M>>, typ
     }
 }
 
+pub struct ThreadState {
+    pub save_states: Vec<SaveState>,
+    pub expansions: Vec<Expansion>,
+    pub expr: PartialExpr
+}
 
 fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, shared: &Shared<D,M>, typeset: &TypeSet) {
 
@@ -503,15 +517,25 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, s
     let mut env: VecDeque<Type> = if tp.is_arrow(&typeset) { tp.iter_args(&typeset).collect() } else { VecDeque::new() };
     env.make_contiguous().reverse();
 
-    let mut save_states: Vec<SaveState> = vec![];
-    let mut expansions: Vec<Expansion> = vec![];
-    // let mut solutions: HashMap<TaskName, Vec<PartialExpr>> = Default::default();
-    let mut expr = PartialExpr::single_hole(tp.return_type(&typeset), env.clone(), typeset);
-    add_expansions(&mut expr, &mut expansions, &mut save_states, &shared.prods, &shared.model, work_item.lower_bound);
+    let state_mutex = Mutex::new(ThreadState {
+        save_states: Default::default(),
+        expansions: Default::default(),
+        expr: PartialExpr::single_hole(tp.return_type(&typeset), env.clone(), typeset),
+    });
+
+
+    let mut state = state_mutex.lock().unwrap();
+    add_expansions(&mut state, &shared.prods, &shared.model, work_item.lower_bound);
+    drop(state);
 
     let mut local_stats = LocalStats::default();
 
     loop {
+        // LOCK SAFETY: this lock() is inside of the scope of `loop{}` so that it is always dropped before
+        // the next iteration or when exiting the loop. Therefore there will be a brief unlocked moment after each
+        // iteration, during which time other threads can take the lock.
+        let state = &mut state_mutex.lock().unwrap();
+
         if let Some(timeout) = shared.cfg.timeout {
             if shared.tstart.elapsed().as_secs() > timeout {
                 break
@@ -531,46 +555,44 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, s
         }
 
         // check if totally done
-        if save_states.is_empty() {
+        if state.save_states.is_empty() {
             break
         }
 
+        // reset to the current save state
+        state.reset_to_save_state();
+
         // check if we need to pop our save state to pop a step upwards in DFS
-        if save_states.last().unwrap().num_expansions == 0 {
-            let state = save_states.pop().unwrap();
-            state.reset_to_save_state(&mut expr);
-            state.reinsert_hole(&mut expr);
+        if state.save_states.last().unwrap().num_expansions == 0 {
+            state.pop_state();
             continue
         }
 
-        // reset to the current save state
-        save_states.last().unwrap().reset_to_save_state(&mut expr);
-
         // apply the expansion
-        expansions.pop().unwrap().apply(&mut expr, &save_states.last().unwrap().hole);
-        save_states.last_mut().unwrap().num_expansions -= 1;
+        state.expansions.pop().unwrap().apply(state);
+        state.save_states.last_mut().unwrap().num_expansions -= 1;
 
-        assert!(expr.ll > work_item.lower_bound);
+        assert!(state.expr.ll > work_item.lower_bound);
 
         local_stats.num_processed += 1;
 
         if let Some(track) = &shared.track {
-            if !track.starts_with(expr.to_string().split("??").next().unwrap()) {
-                if shared.cfg.verbose_worklist { println!("{}: {}","[pruned by track]".yellow(), expr ); }
+            if !track.starts_with(state.expr.to_string().split("??").next().unwrap()) {
+                if shared.cfg.verbose_worklist { println!("{}: {}","[pruned by track]".yellow(), state.expr ); }
                 continue;
             }
         }
 
-        if shared.cfg.verbose_worklist { println!("Processing {} | holes: {}", expr, expr.holes.len()); }
+        if shared.cfg.verbose_worklist { println!("Processing {} | holes: {}", state.expr, state.expr.holes.len()); }
 
-        if expr.holes.is_empty() {
+        if state.expr.holes.is_empty() {
             // newly completed program
-            if expr.ll > work_item.upper_bound {
+            if state.expr.ll > work_item.upper_bound {
                 continue; // too high probability - was enumerated on a previous pass of depth first search
             }
             local_stats.num_finished += 1;
 
-            let solved_tasks = check_correctness(&shared, &work_item.tasks, &expr, &env, &mut local_stats);
+            let solved_tasks = check_correctness(&shared, &work_item.tasks, &state.expr, &env, &mut local_stats);
 
             for task_name in solved_tasks {
                 let mut crit = shared.crit.lock().unwrap();
@@ -583,11 +605,11 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, s
 
                 let solutions = crit.solutions.get_mut(&task_name).unwrap();
 
-                if solutions.len() == shared.cfg.num_solns && solutions.last().unwrap().ll > expr.ll {
+                if solutions.len() == shared.cfg.num_solns && solutions.last().unwrap().ll > state.expr.ll {
                     continue // we already have enough solutions, and this wouldn't even improve on our worst solution
                 }
 
-                let soln = Solution { task_name: task_name.clone(), time_secs: shared.tstart.elapsed().as_secs_f32(), expr: expr.clone(), ll: expr.ll };
+                let soln = Solution { task_name: task_name.clone(), time_secs: shared.tstart.elapsed().as_secs_f32(), expr: state.expr.clone(), ll: state.expr.ll };
 
                 solutions.push(soln.clone());
                 solutions.sort_by_key(|soln| -soln.ll); // stable sort is good here so that the first thing found stays first if it's high ll, so its timeout gets used for printing
@@ -620,7 +642,7 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, s
 
         } else {
             // println!("{}: {} (ll={})", "expanding".yellow(), expr, expr.ll);
-            add_expansions(&mut expr, &mut expansions, &mut save_states, &shared.prods, &shared.model, work_item.lower_bound);
+            add_expansions(state, &shared.prods, &shared.model, work_item.lower_bound);
         }
     }
 
