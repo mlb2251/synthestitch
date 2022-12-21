@@ -93,7 +93,7 @@ fn run<D: Domain>(args: &Args) {
             } else {
                 assert_eq!(solns[&task_name].len(), 1);
                 let soln = solns[&task_name][0].clone();
-                assert_eq!(soln.to_string(), strip_lambdas(&target_soln));
+                assert_eq!(soln.expr.to_string(), strip_lambdas(&target_soln));
                 hits.push((task_name, soln));
             }
         }

@@ -564,6 +564,7 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, s
 
         // check if we need to pop our save state to pop a step upwards in DFS
         if state.save_states.last().unwrap().num_expansions == 0 {
+            // pop the last state.save_states and reinsert its hole into expr.holes
             state.pop_state();
             continue
         }
