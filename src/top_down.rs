@@ -137,11 +137,10 @@ impl SaveState {
     pub fn new(expr: &PartialExpr, hole: Hole, num_expansions: usize) -> SaveState {
         SaveState { hole, ctx_save_state: expr.ctx.save_state(), prev_prod: expr.prev_prod.clone(), ll: expr.ll, hole_len: expr.holes.len(), expr_len: expr.expr.len(), num_expansions }
     }
-    pub fn apply_with_hole(self, expr: &mut PartialExpr) {
-        self.apply_without_hole(expr);
+    pub fn reinsert_hole(self, expr: &mut PartialExpr) {
         expr.holes.push(self.hole);
     }
-    pub fn apply_without_hole(&self, expr: &mut PartialExpr) {
+    pub fn reset_to_save_state(&self, expr: &mut PartialExpr) {
         expr.ctx.load_state(self.ctx_save_state);
         expr.prev_prod = self.prev_prod.clone();
         expr.ll = self.ll;
@@ -369,6 +368,7 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
 
     let crit = shared.crit.lock().unwrap();
     println!("Final Stats: {:?}", crit.stats);
+    println!("{}s", shared.tstart.elapsed().as_secs_f32());
     crit.solutions.clone()
 }
 
@@ -537,12 +537,14 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, s
 
         // check if we need to pop our save state to pop a step upwards in DFS
         if save_states.last().unwrap().num_expansions == 0 {
-            save_states.pop().unwrap().apply_with_hole(&mut expr);
+            let state = save_states.pop().unwrap();
+            state.reset_to_save_state(&mut expr);
+            state.reinsert_hole(&mut expr);
             continue
         }
 
         // reset to the current save state
-        save_states.last().unwrap().apply_without_hole(&mut expr);
+        save_states.last().unwrap().reset_to_save_state(&mut expr);
 
         // apply the expansion
         expansions.pop().unwrap().apply(&mut expr, &save_states.last().unwrap().hole);
@@ -608,6 +610,7 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, s
                 println!("{}",crit);
                 let elapsed = shared.tstart.elapsed().as_secs_f32();
                 println!("Expansion rate: {} expansions/s (doesn't include expansions from in-progress threads)", ((crit.stats.local.num_processed as f32) / elapsed) as i32); // this doesnt acct for threads that are actively working
+                println!("{}s", shared.tstart.elapsed().as_secs_f32());
                 drop(crit);
 
                 if shared.cfg.one_soln {
