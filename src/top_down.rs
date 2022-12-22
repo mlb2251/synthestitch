@@ -392,6 +392,7 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
         }
     }
 
+    { println!("{}", shared.search_progress.lock().unwrap().show(&shared)); }
     println!("Final: {:?}", shared.stats);
     println!("{}s", shared.tstart.elapsed().as_secs_f32());
     shared.search_progress.into_inner().unwrap()
@@ -437,6 +438,7 @@ impl Display for Solution {
 impl SearchProgress {
     fn show<D: Domain, M: ProbabilisticModel>(&self, shared: &Shared<D,M>) -> String {
         let mut s = String::new();
+        s += "---------------------\n";
         s += &format!("Still enumerating for {} types:\n", self.unsolved_tasks.len());
         for (_, tasks) in self.unsolved_tasks.iter() {
             s += &format!("\t{} for [{} tasks]: {}\n", shared.tasks[tasks.first().unwrap()].tp, tasks.len(), tasks.iter().map(|t| t.to_string()).join(", "));
@@ -453,6 +455,7 @@ impl SearchProgress {
                 s += &format!("\n\t{}: [{}] {}", name, num_solns, solns.first().unwrap());
             }
         }
+        s += "\n---------------------";
         s
     }
 }
@@ -596,6 +599,7 @@ fn search_worker<D: Domain, M: ProbabilisticModel>(shared: Arc<Shared<D,M>>, thr
         if all_done && thread_idx == 0 {
 
             // lock scope
+            { println!("{}", shared.search_progress.lock().unwrap().show(&shared)); }
             { println!("Appx expansion rate: {} expansions/s", ((shared.stats.lock().unwrap().local.num_processed as f32) / shared.tstart.elapsed().as_secs_f32()) as i32); }
 
 
@@ -658,6 +662,11 @@ fn search_worker<D: Domain, M: ProbabilisticModel>(shared: Arc<Shared<D,M>>, thr
                     all_solutions.sort_by_key(|soln| -soln.ll); // stable sort is good here so that the first thing found stays first if it's high ll, so its timeout gets used for printing
                     all_solutions.truncate(shared.cfg.num_solns);
                 }
+                if shared.cfg.one_soln {
+                    assert!(shared.cfg.threads == 1);
+                    // shared.search_progress.lock().unwrap().status = SearchStatus::Done;
+                    return
+                }
             }
 
         }
@@ -677,6 +686,7 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(thread_idx: usize, work_it
 
     let mut local_stats = LocalStats::default();
 
+    'outer:
     loop {
         // LOCK SAFETY: this lock() is inside of the scope of `loop{}` so that it is always dropped before
         // the next iteration or when exiting the loop. Therefore there will be a brief unlocked moment after each
@@ -753,7 +763,7 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(thread_idx: usize, work_it
                 solutions.push(soln);
 
                 if shared.cfg.one_soln {
-                    break
+                    break 'outer
                 }
             }
 

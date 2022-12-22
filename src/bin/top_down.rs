@@ -102,7 +102,7 @@ fn run<D: Domain>(args: &Args) {
         println!("Hits: {}/{}", hits.len(), hits.len() + misses.len());
         hits.sort_by_key(|(_,soln)| -soln.ll);
         for (task_name, soln) in hits {
-            println!("{} {} [ll={}]: {}", "Solved".green(), task_name, soln.ll,  soln);
+            println!("{} {}: {}", "Solved".green(), task_name,  soln);
         }
         for (task_name, soln) in misses {
             println!("{} {} -> {}", "Miss".red(), task_name, soln);
