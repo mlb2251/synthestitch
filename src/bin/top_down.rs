@@ -87,7 +87,8 @@ fn run<D: Domain>(args: &Args) {
             cfg.one_soln = true;
             cfg.min_ll = Some(-100.);
             cfg.threads = 1;
-            let solns = top_down(&model, &dsl, &tasks, &cfg);
+            let search_progress = top_down(&model, &dsl, &tasks, &cfg);
+            let solns = search_progress.solutions;
             if solns[&task_name].is_empty() {
                 misses.push((task_name, target_soln));
             } else {

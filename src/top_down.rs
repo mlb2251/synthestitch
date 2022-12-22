@@ -61,7 +61,7 @@ struct Stats {
 }
 
 #[derive(Clone, Debug, Default)]
-struct LocalStats {
+pub struct LocalStats {
     num_processed: usize,
     num_finished: usize,
     num_eval_ok: usize,
@@ -83,15 +83,23 @@ impl LocalStats {
 
 #[derive(Debug)]
 struct Shared<D: Domain, M: ProbabilisticModel> {
-    crit: Mutex<CriticalMultithreadData<D>>,
-    thread_states: Mutex<Vec<ThreadState>>,
-    typeset: Mutex<TypeSet>,
+    search_progress: Mutex<SearchProgress>,
+    thread_states: Vec<Mutex<Option<ThreadState>>>,
+    stats: Mutex<Stats>,
     cfg: TopDownConfig,
     dsl: DSL<D>,
     model: M,
+    tasks: HashMap<TaskName,Task<D>>,
     prods: Vec<Prod>,
     track: Option<String>,
     tstart: Instant
+}
+
+#[derive(Debug,Clone)]
+pub enum SearchStatus {
+    NotStarted,
+    Working(WorkItem),
+    Done
 }
 
 #[derive(Debug,Clone)]
@@ -292,7 +300,7 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
     dsl: &DSL<D>,
     all_tasks: &[Task<D>],
     cfg: &TopDownConfig,
-) -> HashMap<TaskName, Vec<Solution>> {
+) -> SearchProgress {
 
     println!("DSL:");
     for entry in dsl.productions.values() {
@@ -317,8 +325,10 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
     
     let mut typeset = TypeSet::empty();
 
-    let unsolved_tasks: Vec<(Idx,Vec<Task<D>>)> = all_tasks.iter().map(|task| (task.tp.clone(), task.clone())).into_group_map()
+    let unsolved_tasks: Vec<(Idx,Vec<TaskName>)> = all_tasks.iter().map(|task| (task.tp.clone(), task.name.clone())).into_group_map()
         .into_iter().map(|(tp,tasks)| (typeset.add_tp(&tp),tasks)).collect();
+    
+    let tasks: HashMap<TaskName,Task<D>> = all_tasks.iter().map(|task| (task.name.clone(), task.clone())).collect();
 
     let mut prods: Vec<Prod> = dsl.productions.values().map(|entry| Prod::Prim(entry.name.clone(), typeset.add_tp(&entry.tp))).collect();
     // sort by arity as DC does to explore smaller things first (also sort  by name but thats just for determinism)
@@ -328,31 +338,34 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
         } else { unreachable!() }
     });
 
-    let work_item_generator = WorkItemGenerator {
+    let search_progress = SearchProgress {
+        status: SearchStatus::NotStarted,
+        original_typeset: typeset.clone(),
         unsolved_tasks,
-        cfg_min_ll: cfg.min_ll,
-        cfg_step: cfg.step,
+        solutions,
         curr: 0,
         curr_upper_bound: NotNan::new(0.).unwrap(),
-        cfg_timeout: cfg.timeout.clone(),
         tstart,
+        cfg: cfg.clone(),
     };
 
+    let thread_states = (0..cfg.threads).map(|_| Mutex::new(None)).collect();
+
     let shared = Arc::new(Shared {
-        crit: Mutex::new(CriticalMultithreadData { stats, work_item_generator, solutions }),
-        thread_states: Mutex::new(vec![]),
-        typeset: Mutex::new(typeset),
+        search_progress: Mutex::new(search_progress),
+        thread_states,
+        stats: Mutex::new(stats),
         cfg: cfg.clone(),
         dsl: dsl.clone(),
         model: model.clone(),
+        tasks,
         prods,
         track,
         tstart,
     });
 
-    let crit = shared.crit.lock().unwrap();
-    println!("{}", crit);
-    drop(crit);
+    // lock scope
+    { println!("{}", shared.search_progress.lock().unwrap().show(&*shared)); }
 
     if cfg.threads == 1 {
         // Single threaded
@@ -379,35 +392,30 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
         }
     }
 
-    let crit = shared.crit.lock().unwrap();
-    println!("Final Stats: {:?}", crit.stats);
+    println!("Final: {:?}", shared.stats);
     println!("{}s", shared.tstart.elapsed().as_secs_f32());
-    crit.solutions.clone()
+    shared.search_progress.into_inner().unwrap()
 }
 
-pub struct WorkItem<D: Domain> {
-    tp: Idx,
-    tasks: Vec<Task<D>>,
+#[derive(Debug, Clone)]
+pub struct WorkItem {
+    tp: Type,
+    env: VecDeque<Type>,
+    tasks: Vec<TaskName>,
     upper_bound: NotNan<f32>,
     lower_bound: NotNan<f32>,
 }
 
 #[derive(Debug)]
-pub struct WorkItemGenerator<D: Domain> {
-    unsolved_tasks: Vec<(Idx,Vec<Task<D>>)>,
-    cfg_min_ll: Option<f32>,
-    cfg_step: f32,
+pub struct SearchProgress {
+    pub status: SearchStatus,
+    pub solutions: HashMap<TaskName, Vec<Solution>>,
+    pub original_typeset: TypeSet,
+    pub unsolved_tasks: Vec<(Idx,Vec<TaskName>)>,
     curr: usize, // index into unsolved_tasks
     curr_upper_bound: NotNan<f32>,
-    cfg_timeout: Option<u64>,
-    tstart: Instant
-}
-
-#[derive(Debug)]
-pub struct CriticalMultithreadData<D: Domain> {
-    stats: Stats,
-    work_item_generator: WorkItemGenerator<D>,
-    solutions: HashMap<TaskName, Vec<Solution>>,
+    tstart: Instant,
+    cfg: TopDownConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -415,7 +423,8 @@ pub struct Solution {
     pub task_name: TaskName,
     pub time_secs: f32,
     pub expr: PartialExpr,
-    pub ll: NotNan<f32>
+    pub ll: NotNan<f32>,
+    pub stats: LocalStats
 }
 
 impl Display for Solution {
@@ -425,39 +434,61 @@ impl Display for Solution {
 }
 
 
-
-
-
-impl<D: Domain> Display for CriticalMultithreadData<D> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}\n", self.stats)?;
-        write!(f, "Still enumerating for {} types:\n", self.work_item_generator.unsolved_tasks.len())?;
-        for (_, tasks) in self.work_item_generator.unsolved_tasks.iter() {
-            write!(f, "\t{} for [{} tasks]: {}\n", tasks.first().unwrap().tp, tasks.len(), tasks.iter().map(|t| t.name.to_string()).join(", "))?;
+impl SearchProgress {
+    fn show<D: Domain, M: ProbabilisticModel>(&self, shared: &Shared<D,M>) -> String {
+        let mut s = String::new();
+        s += &format!("Still enumerating for {} types:\n", self.unsolved_tasks.len());
+        for (_, tasks) in self.unsolved_tasks.iter() {
+            s += &format!("\t{} for [{} tasks]: {}\n", shared.tasks[tasks.first().unwrap()].tp, tasks.len(), tasks.iter().map(|t| t.to_string()).join(", "));
         }
         let mut tasks: Vec<TaskName> = self.solutions.keys().cloned().collect();
         tasks.sort();
-        write!(f, "Solutions:")?;
+        s += &format!("Solutions:");
         for name in &tasks {
             let solns = &self.solutions[name];
             if solns.is_empty() {
-                write!(f, "\n\t{}: [{}]", name, "no solns".red())?;
+                s += &format!("\n\t{}: [{}]", name, "no solns".red());
             } else {
                 let num_solns = format!("{} solns", solns.len()).green();
-                write!(f, "\n\t{}: [{}] {}", name, num_solns, solns.first().unwrap())?;
+                s += &format!("\n\t{}: [{}] {}", name, num_solns, solns.first().unwrap());
             }
         }
-        Ok(())
+        s
     }
 }
 
-impl<D: Domain> Iterator for WorkItemGenerator<D> {
-    type Item = WorkItem<D>;
+impl Iterator for SearchProgress {
+    type Item = (WorkItem,PartialExpr);
     fn next(&mut self) -> Option<Self::Item> {
+
+        let unsolved_tasks = &mut self.unsolved_tasks;
+        let all_solutions = &self.solutions;
+        let num_solns = self.cfg.num_solns;
+
+        unsolved_tasks.retain_mut(|(_tp,tasks)| {
+            tasks.retain(|task| {
+                let solns = all_solutions.get(task).unwrap();
+                // retain if not enough solutions
+                if solns.len() >= num_solns {
+                    println!("{}: {}", "Done enumerating for task".green(), task);
+                    false
+                } else {
+                    true
+                }
+            });
+            // retain if there are tasks remaining
+            if tasks.is_empty() {
+                println!("{}: <type>", "Done enumerating for type".green());
+                false
+            } else {
+                true
+            }
+        });
+
         if self.unsolved_tasks.is_empty() {
             return None
         }
-        if let Some(timeout) = self.cfg_timeout {
+        if let Some(timeout) = self.cfg.timeout {
             if self.tstart.elapsed().as_secs() > timeout {
                 return None
             }
@@ -465,11 +496,11 @@ impl<D: Domain> Iterator for WorkItemGenerator<D> {
 
         if self.curr >= self.unsolved_tasks.len() {
             self.curr = 0;
-            self.curr_upper_bound -= self.cfg_step;
-            println!("{}: [{} < ll <= {}]", "Increasing depth".green(), self.curr_upper_bound - self.cfg_step, self.curr_upper_bound );
+            self.curr_upper_bound -= self.cfg.step;
+            println!("{}: [{} < ll <= {}]", "Increasing depth".green(), self.curr_upper_bound - self.cfg.step, self.curr_upper_bound );
             
             // global min ll cutoff check
-            if let Some(min_ll) = self.cfg_min_ll {
+            if let Some(min_ll) = self.cfg.min_ll {
                 if *self.curr_upper_bound < min_ll {
                     return None
                 }
@@ -477,14 +508,27 @@ impl<D: Domain> Iterator for WorkItemGenerator<D> {
         }
 
         let (tp, tasks) = &self.unsolved_tasks[self.curr];
+
+        let mut typeset = self.original_typeset.clone();
+        let tp = typeset.instantiate(*tp);
+
+        // if we want to wrap this in some lambdas and return it, then the outermost lambda should be the first type in
+        // the list of arg types. This will be the *largest* de bruijn index within the body of the program, therefore
+        // we should reverse the 
+        let mut env: VecDeque<Type> = if tp.is_arrow(&typeset) { tp.iter_args(&typeset).collect() } else { VecDeque::new() };
+        env.make_contiguous().reverse();
+
+        let single_hole = PartialExpr::single_hole(tp.return_type(&typeset), env.clone(), typeset);
+
         let work_item = WorkItem {
-            tp: *tp,
+            tp,
+            env,
             tasks: tasks.clone(),
             upper_bound: self.curr_upper_bound,
-            lower_bound: self.curr_upper_bound - self.cfg_step,
+            lower_bound: self.curr_upper_bound - self.cfg.step,
         };
         self.curr += 1;
-        Some(work_item)
+        Some((work_item,single_hole))
     }
 }
 
@@ -493,27 +537,130 @@ impl<D: Domain> Iterator for WorkItemGenerator<D> {
 fn search_worker<D: Domain, M: ProbabilisticModel>(shared: Arc<Shared<D,M>>, thread_idx: usize) {
     loop {
 
-        // do we have stuff to do?
-        let mut crit = shared.crit.lock().unwrap();
-
-        if thread_idx == 0 {
-            // this is the primary worker
-        } else {
-            // this is a secondary worker
+        // if search is marked as done we can return, if it hasn't yet started we should keep waiting, otherwise proceed
+        { // lock scope
+            match shared.search_progress.lock().unwrap().status {
+                SearchStatus::Done => return,
+                SearchStatus::NotStarted => if thread_idx != 0 { continue },
+                SearchStatus::Working(_) => {}
+            }
         }
 
+        // the point of this loop is to populate thread_states with something new, we should only enter here when it's set to None
+        // lock scope
+        { assert!(shared.thread_states[thread_idx].lock().unwrap().is_none()); }
 
+        let mut new_state = None;
+        let mut all_done = true;
 
-        let mut crit = shared.crit.lock().unwrap();
-        let work_item = crit.work_item_generator.next();
-        if let Some(work_item) = work_item {
-            println!("[Thread {:?}] {} [{} < ll <= {}] {} @ {:.3}s {:?}", thread::current().id(), "Launching search".yellow(), work_item.lower_bound, work_item.upper_bound, work_item.tasks[0].tp, shared.tstart.elapsed().as_secs_f32(), crit.stats);
-            drop(crit);
-            search_in_bounds(&work_item, &*shared);
-        } else {
-            return // implicitly drop `crit`
+        // try work stealing
+        for state in shared.thread_states.iter() {
+            // LOCK SAFETY: lock will drop at end of for-loop, and we aren't currently holding any locks and will not take
+            // more locks during this block.
+            // EFFICIENCY: We will block on any threads that are actively working, but since they release their lock once per
+            // expansions and they do ~1M expansions per second, this is fine. Also, they won't mind that we took the lock
+            // because this only happens when we are planning to save them some work and when we are being idle ourselves.
+            if let Some(state) = state.lock().unwrap().as_mut() {
+                all_done = false;
+
+                // steal from the oldest save_state with 1+ expansions.
+                let stolen_from = state.save_states.iter().position(|s| s.num_expansions > 0);
+                // we can steal if there are 2+ expansion
+                if let Some(stolen_from) = stolen_from {
+                    // We will steal half of the expansions, or 1 if there is only 1 expansion
+                    let num_to_take = std::cmp::max(1, state.save_states[stolen_from].num_expansions / 2);
+                    let stolen_expansions = state.expansions.drain(0..num_to_take).collect();
+                    state.save_states[stolen_from].num_expansions -= num_to_take;
+
+                    new_state = Some(ThreadState {
+                        save_states: state.save_states.clone(), // we don't care about the save states
+                        expansions: stolen_expansions,
+                        expr: state.expr.clone(),
+                    });
+
+                    // pop all the later save states until stolen_from is at the last position
+                    while new_state.as_ref().unwrap().save_states.len() - 1 > stolen_from {
+                        new_state.as_mut().unwrap().reset_to_save_state();
+                        new_state.as_mut().unwrap().pop_state();
+                    }
+                    // set stolen_from to have just 1 expansion
+                    new_state.as_mut().unwrap().save_states[stolen_from].num_expansions = num_to_take;
+
+                    // println!("[Thread {:?}] {}", thread::current().id(), "Stole work".yellow());
+
+                    break
+                }
+            }
         }
 
+        if all_done && thread_idx == 0 {
+
+            // lock scope
+            { println!("Appx expansion rate: {} expansions/s", ((shared.stats.lock().unwrap().local.num_processed as f32) / shared.tstart.elapsed().as_secs_f32()) as i32); }
+
+
+            // if no other threads are working, and we're the primary worker, we can generate new work
+            // LOCK SAFETY: all_done means all other threads are just spinning in the search_worker loop waiting for
+            // new work. They might take this mutex but only briefly to check .status, and never while holding any other locks.
+            let mut search_progress = shared.search_progress.lock().unwrap();
+            if let Some((work_item,single_hole)) = search_progress.next() {
+                println!("[Thread {:?}] {} [{} < ll <= {}] {} @ {:.3}s", thread::current().id(), "Launching search".yellow(), work_item.lower_bound, work_item.upper_bound, shared.tasks[&work_item.tasks[0]].tp, shared.tstart.elapsed().as_secs_f32());
+                let mut state = ThreadState {
+                    save_states: vec![],
+                    expansions: vec![],
+                    expr: single_hole,
+                };
+                add_expansions(&mut state, &shared.prods, &shared.model, work_item.lower_bound);
+                search_progress.status = SearchStatus::Working(work_item);
+                // LOCK SAFETY: anyone holding our thread_state lock to steal from it will release it immediately when they find it has None,
+                // so this will succeed quickly. Also, only we can make it not None so that couldn't have chanced from earlier.
+                new_state = Some(state);
+            } else {
+                // there's no more work to be done - mark as Done so all other threads exit too
+                search_progress.status = SearchStatus::Done;
+                return
+            }
+        }
+        
+        // run search!
+        if let Some(new_state) = new_state {
+            // if new_state succeeded, we must have either just created work or stolen work
+
+            // lock scope
+            { *shared.thread_states[thread_idx].lock().unwrap() = Some(new_state); }
+
+
+            let work_item = { // lock scope
+                match &shared.search_progress.lock().unwrap().status {
+                    SearchStatus::Working(work_item) => work_item.clone(),
+                    _ => panic!("search_progress.status should be Working")
+                }
+            };
+
+            // do the actual search
+            let solutions = search_in_bounds(thread_idx, work_item, &*shared);
+
+            // deal with solutions
+            if !solutions.is_empty() {
+                let mut search_progress = shared.search_progress.lock().unwrap();
+                for soln in solutions {
+
+                    let all_solutions = search_progress.solutions.get_mut(&soln.task_name).unwrap();
+
+                    if all_solutions.len() == 1 {
+                        // LOCK SAFETY: in no part of the code do we take the search progress lock while already holding the stats lock
+                        let mut stats = shared.stats.lock().unwrap();
+                        stats.num_never_solved -= 1;
+                        stats.num_solved_once += 1;
+                    }
+            
+                    all_solutions.push(soln.clone());
+                    all_solutions.sort_by_key(|soln| -soln.ll); // stable sort is good here so that the first thing found stays first if it's high ll, so its timeout gets used for printing
+                    all_solutions.truncate(shared.cfg.num_solns);
+                }
+            }
+
+        }
     }
 }
 
@@ -524,30 +671,9 @@ pub struct ThreadState {
     pub expr: PartialExpr
 }
 
-fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, shared: &Shared<D,M>) {
+fn search_in_bounds<D: Domain, M: ProbabilisticModel>(thread_idx: usize, work_item: WorkItem, shared: &Shared<D,M>) -> Vec<Solution> {
 
-    let typeset_guard = shared.typeset.lock().unwrap();
-    let mut typeset = typeset_guard.clone();
-    drop(typeset_guard);
-
-    let tp =  typeset.instantiate(work_item.tp);
-
-    // if we want to wrap this in some lambdas and return it, then the outermost lambda should be the first type in
-    // the list of arg types. This will be the *largest* de bruijn index within the body of the program, therefore
-    // we should reverse the 
-    let mut env: VecDeque<Type> = if tp.is_arrow(&typeset) { tp.iter_args(&typeset).collect() } else { VecDeque::new() };
-    env.make_contiguous().reverse();
-
-    let state_mutex = Mutex::new(ThreadState {
-        save_states: Default::default(),
-        expansions: Default::default(),
-        expr: PartialExpr::single_hole(tp.return_type(&typeset), env.clone(), typeset),
-    });
-
-
-    let mut state = state_mutex.lock().unwrap();
-    add_expansions(&mut state, &shared.prods, &shared.model, work_item.lower_bound);
-    drop(state);
+    let mut solutions = vec![];
 
     let mut local_stats = LocalStats::default();
 
@@ -555,7 +681,8 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, s
         // LOCK SAFETY: this lock() is inside of the scope of `loop{}` so that it is always dropped before
         // the next iteration or when exiting the loop. Therefore there will be a brief unlocked moment after each
         // iteration, during which time other threads can take the lock.
-        let state = &mut state_mutex.lock().unwrap();
+        let mut lock = shared.thread_states[thread_idx].lock().unwrap();
+        let state = &mut lock.as_mut().unwrap();
 
         if let Some(timeout) = shared.cfg.timeout {
             if shared.tstart.elapsed().as_secs() > timeout {
@@ -563,20 +690,13 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, s
             }
         }
 
-        if local_stats.num_processed % 1_000_000 == 0 {
-            let crit = shared.crit.lock().unwrap();
-            // if our `tp` is no longer in `unsolved_tasks`, we should check to see if our upper bound (ie the best we can do) is
-            // lower than or equal to all the lls of found solutions.
-            if crit.work_item_generator.unsolved_tasks.iter().position(|(tp, _)| tp == &work_item.tp).is_none()
-                && work_item.tasks.iter().all(|task| crit.solutions.get(&task.name).unwrap().last().unwrap().ll >= work_item.upper_bound)
-            {
-                println!("[Thread {:?}] {}", thread::current().id(), "detected unnecessary enumeration, exiting search".yellow());
-                break
-            }
+        // occasionally transfer stats over. Note num_processed gets reset to 0 during a transfer
+        if local_stats.num_processed >= 25_000 {
+            shared.stats.lock().unwrap().local.transfer(&mut local_stats);
         }
 
         // check if totally done
-        if state.save_states.is_empty() {
+        if state.expansions.is_empty() {
             break
         }
 
@@ -614,51 +734,26 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, s
             }
             local_stats.num_finished += 1;
 
-            let solved_tasks = check_correctness(&shared, &work_item.tasks, &state.expr, &env, &mut local_stats);
+            let solved_tasks = check_correctness(&shared, &work_item, &state.expr, &mut local_stats);
 
             for task_name in solved_tasks {
-                let mut crit = shared.crit.lock().unwrap();
-                crit.stats.local.transfer(&mut local_stats);
 
-                if crit.solutions.get(&task_name).unwrap().len() == 1 {
-                    crit.stats.num_never_solved -= 1;
-                    crit.stats.num_solved_once += 1;
-                }
+                // update the global stats and save a copy for this solution
+                let solution_stats = { // lock scope
+                    let mut global_stats = shared.stats.lock().unwrap();
+                    global_stats.local.transfer(&mut local_stats);
+                    global_stats.local.clone()
+                };
+                
+                let soln = Solution { task_name: task_name.clone(), time_secs: shared.tstart.elapsed().as_secs_f32(), expr: state.expr.clone(), ll: state.expr.ll, stats: solution_stats };
+                
+                println!("[Thread {:?}] {} for {}: {}", thread::current().id(), "New Solution".green(), task_name, soln);
+                println!("Soln Stats (may be up to 25,000 expansions in each other thread)  {:?}", soln.stats);
 
-                let solutions = crit.solutions.get_mut(&task_name).unwrap();
-
-                if solutions.len() == shared.cfg.num_solns && solutions.last().unwrap().ll > state.expr.ll {
-                    continue // we already have enough solutions, and this wouldn't even improve on our worst solution
-                }
-
-                let soln = Solution { task_name: task_name.clone(), time_secs: shared.tstart.elapsed().as_secs_f32(), expr: state.expr.clone(), ll: state.expr.ll };
-
-                solutions.push(soln.clone());
-                solutions.sort_by_key(|soln| -soln.ll); // stable sort is good here so that the first thing found stays first if it's high ll, so its timeout gets used for printing
-                solutions.truncate(shared.cfg.num_solns);
-
-                if solutions.len() == shared.cfg.num_solns {
-                    if let Some(i) = crit.work_item_generator.unsolved_tasks.iter().position(|(tp, _)| tp == &work_item.tp) {
-                        if let Some(j) = crit.work_item_generator.unsolved_tasks[i].1.iter().position(|task| task.name == task_name) {
-                            crit.work_item_generator.unsolved_tasks[i].1.remove(j);
-                            println!("{}: {}", "Done enumerating for task".green(), task_name);
-                            if crit.work_item_generator.unsolved_tasks[i].1.is_empty() {
-                                println!("{}: <type>", "Done enumerating for type".green());
-                                crit.work_item_generator.unsolved_tasks.remove(i);
-                            }    
-                        }
-                    }
-                }
-
-                println!("[Thread {:?}] {} for {}: {}", thread::current().id(), "New Solution".green(), soln.task_name, soln);
-                println!("{}",crit);
-                let elapsed = shared.tstart.elapsed().as_secs_f32();
-                println!("Expansion rate: {} expansions/s (doesn't include expansions from in-progress threads)", ((crit.stats.local.num_processed as f32) / elapsed) as i32); // this doesnt acct for threads that are actively working
-                println!("{}s", shared.tstart.elapsed().as_secs_f32());
-                drop(crit);
+                solutions.push(soln);
 
                 if shared.cfg.one_soln {
-                    return
+                    break
                 }
             }
 
@@ -668,18 +763,21 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, s
         }
     }
 
-    let mut crit = shared.crit.lock().unwrap();
-    crit.stats.local.transfer(&mut local_stats);
-    drop(crit);
+    // lock scope
+    { shared.stats.lock().unwrap().local.transfer(&mut local_stats) };
+    // lock scope
+    { *shared.thread_states[thread_idx].lock().unwrap() = None; }
+    solutions
 }
 
 
 #[inline(never)]
-fn check_correctness<D: Domain, M: ProbabilisticModel>(shared: &Shared<D,M>, tasks: &[Task<D>], expanded: &PartialExpr, env: &VecDeque<Type>, local_stats: &mut LocalStats) -> Vec<TaskName> {
+fn check_correctness<D: Domain, M: ProbabilisticModel>(shared: &Shared<D,M>, work_item: &WorkItem, expanded: &PartialExpr, local_stats: &mut LocalStats) -> Vec<TaskName> {
     let mut solved_tasks: Vec<TaskName> = vec![];
 
-    // debug_assert!(expanded.expr.get(0).infer::<D>(&mut Context::empty(), &mut (env.clone())).is_ok());
-    for task in tasks {
+    // debug_assert!(expanded.expr.get(0).infer::<D>(&mut Context::empty(), &mut (work_item.env.clone())).is_ok());
+    for task_name in work_item.tasks.iter() {
+        let task = &shared.tasks[task_name];
         let mut solved = true;
         for io in task.ios.iter() {
             // probably excessively much cloning and such here lol
