@@ -58,6 +58,7 @@ struct Stats {
     local: LocalStats,
     num_solved_once: usize,
     num_never_solved: usize,
+    num_steals: usize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -311,6 +312,7 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
         local: Default::default(),
         num_solved_once: 0,
         num_never_solved: all_tasks.len(),
+        num_steals: 0,
     };
 
     let tstart = Instant::now();
@@ -538,6 +540,7 @@ impl Iterator for SearchProgress {
 
 
 fn search_worker<D: Domain, M: ProbabilisticModel>(shared: Arc<Shared<D,M>>, thread_idx: usize) {
+
     loop {
 
         if let Some(timeout) = shared.cfg.timeout {
@@ -596,6 +599,8 @@ fn search_worker<D: Domain, M: ProbabilisticModel>(shared: Arc<Shared<D,M>>, thr
                     new_state.as_mut().unwrap().save_states[stolen_from].num_expansions = num_to_take;
 
                     // println!("[Thread {:?}] {}", thread::current().id(), "Stole work".yellow());
+
+                    shared.stats.lock().unwrap().num_steals += 1;
 
                     break
                 }
