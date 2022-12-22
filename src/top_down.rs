@@ -21,7 +21,7 @@ pub struct TopDownConfig {
 
     /// timeout in seconds for the search
     #[clap(long)]
-    pub timeout: Option<u64>,
+    pub timeout: Option<f32>,
 
     /// num threads to use
     #[clap(long, short='t', default_value = "1")]
@@ -387,8 +387,8 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
     let shared = Arc::try_unwrap(shared).unwrap();
 
     if let Some(timeout) = shared.cfg.timeout {
-        if shared.tstart.elapsed().as_secs() > timeout {
-            println!("Timeout: stopped search at {} seconds", shared.tstart.elapsed().as_secs());
+        if shared.tstart.elapsed().as_secs_f32() > timeout {
+            println!("{}: stopped search at {} seconds", "Timeout".red().bold(), shared.tstart.elapsed().as_secs_f32());
         }
     }
 
@@ -492,7 +492,7 @@ impl Iterator for SearchProgress {
             return None
         }
         if let Some(timeout) = self.cfg.timeout {
-            if self.tstart.elapsed().as_secs() > timeout {
+            if self.tstart.elapsed().as_secs_f32() > timeout {
                 return None
             }
         }
@@ -539,6 +539,12 @@ impl Iterator for SearchProgress {
 
 fn search_worker<D: Domain, M: ProbabilisticModel>(shared: Arc<Shared<D,M>>, thread_idx: usize) {
     loop {
+
+        if let Some(timeout) = shared.cfg.timeout {
+            if shared.tstart.elapsed().as_secs_f32() > timeout {
+                return
+            }
+        }
 
         // if search is marked as done we can return, if it hasn't yet started we should keep waiting, otherwise proceed
         { // lock scope
@@ -686,19 +692,28 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(thread_idx: usize, work_it
 
     let mut local_stats = LocalStats::default();
 
+    let mut time_check = 0;
+
     'outer:
     loop {
+        
         // LOCK SAFETY: this lock() is inside of the scope of `loop{}` so that it is always dropped before
         // the next iteration or when exiting the loop. Therefore there will be a brief unlocked moment after each
         // iteration, during which time other threads can take the lock.
         let mut lock = shared.thread_states[thread_idx].lock().unwrap();
         let state = &mut lock.as_mut().unwrap();
 
-        if let Some(timeout) = shared.cfg.timeout {
-            if shared.tstart.elapsed().as_secs() > timeout {
-                break
+        // only check time occasionally bc otherwise takes like 7% of runtime
+        time_check += 1;
+        if time_check == 1000 {
+            time_check = 0;
+            if let Some(timeout) = shared.cfg.timeout {
+                if shared.tstart.elapsed().as_secs_f32() > timeout {
+                    break
+                }
             }
         }
+        
 
         // occasionally transfer stats over. Note num_processed gets reset to 0 during a transfer
         if local_stats.num_processed >= 25_000 {
