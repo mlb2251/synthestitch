@@ -84,6 +84,8 @@ impl LocalStats {
 #[derive(Debug)]
 struct Shared<D: Domain, M: ProbabilisticModel> {
     crit: Mutex<CriticalMultithreadData<D>>,
+    thread_states: Mutex<Vec<ThreadState>>,
+    typeset: Mutex<TypeSet>,
     cfg: TopDownConfig,
     dsl: DSL<D>,
     model: M,
@@ -159,6 +161,7 @@ impl ThreadState {
     }
 }
 
+#[derive(Clone,Debug)]
 pub struct Expansion {
     prod: Prod,
     ll: NotNan<f32>,
@@ -337,6 +340,8 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
 
     let shared = Arc::new(Shared {
         crit: Mutex::new(CriticalMultithreadData { stats, work_item_generator, solutions }),
+        thread_states: Mutex::new(vec![]),
+        typeset: Mutex::new(typeset),
         cfg: cfg.clone(),
         dsl: dsl.clone(),
         model: model.clone(),
@@ -351,17 +356,16 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
 
     if cfg.threads == 1 {
         // Single threaded
-        search_worker(Arc::clone(&shared), &typeset);
+        search_worker(Arc::clone(&shared), 0);
     } else {
         // Multithreaded
         thread::scope(|scope| {
             let mut handles = vec![];
-            for _ in 0..cfg.threads {
+            for i in 0..cfg.threads {
                 // clone the Arcs to have copies for this thread
                 let shared = Arc::clone(&shared);
-                let typeset = typeset.clone();
                 handles.push(scope.spawn(move || {
-                    search_worker(shared, &typeset);
+                    search_worker(shared, i);
                 }));
             }
         });
@@ -486,29 +490,46 @@ impl<D: Domain> Iterator for WorkItemGenerator<D> {
 
 
 
-fn search_worker<D: Domain, M: ProbabilisticModel>(shared: Arc<Shared<D,M>>, typeset: &TypeSet) {
+fn search_worker<D: Domain, M: ProbabilisticModel>(shared: Arc<Shared<D,M>>, thread_idx: usize) {
     loop {
+
+        // do we have stuff to do?
+        let mut crit = shared.crit.lock().unwrap();
+
+        if thread_idx == 0 {
+            // this is the primary worker
+        } else {
+            // this is a secondary worker
+        }
+
+
+
         let mut crit = shared.crit.lock().unwrap();
         let work_item = crit.work_item_generator.next();
         if let Some(work_item) = work_item {
             println!("[Thread {:?}] {} [{} < ll <= {}] {} @ {:.3}s {:?}", thread::current().id(), "Launching search".yellow(), work_item.lower_bound, work_item.upper_bound, work_item.tasks[0].tp, shared.tstart.elapsed().as_secs_f32(), crit.stats);
             drop(crit);
-            search_in_bounds(&work_item, &*shared, typeset);
+            search_in_bounds(&work_item, &*shared);
         } else {
             return // implicitly drop `crit`
         }
+
     }
 }
 
+#[derive(Debug,Clone)]
 pub struct ThreadState {
     pub save_states: Vec<SaveState>,
     pub expansions: Vec<Expansion>,
     pub expr: PartialExpr
 }
 
-fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, shared: &Shared<D,M>, typeset: &TypeSet) {
+fn search_in_bounds<D: Domain, M: ProbabilisticModel>(work_item: &WorkItem<D>, shared: &Shared<D,M>) {
 
-    let mut typeset = typeset.clone();
+    let typeset_guard = shared.typeset.lock().unwrap();
+    let mut typeset = typeset_guard.clone();
+    drop(typeset_guard);
+
     let tp =  typeset.instantiate(work_item.tp);
 
     // if we want to wrap this in some lambdas and return it, then the outermost lambda should be the first type in
