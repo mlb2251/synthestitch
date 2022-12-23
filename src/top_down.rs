@@ -113,7 +113,7 @@ pub struct PartialExpr {
 }
 
 impl PartialExpr {
-    pub fn single_hole(tp: Type, env: VecDeque<Type>, typeset: TypeSet) -> PartialExpr {
+    pub fn single_hole(tp: Type, env: Vec<Type>, typeset: TypeSet) -> PartialExpr {
         PartialExpr {expr: ExprSet::empty(Order::ParentFirst, false, false), ctx: typeset, holes: vec![Hole::new(tp,env,None)], prev_prod: None, ll: NotNan::new(0.).unwrap() }
     }
 }
@@ -121,12 +121,12 @@ impl PartialExpr {
 #[derive(Debug,Clone, PartialEq, Eq)]
 pub struct Hole {
     pub tp: Type,
-    pub env: VecDeque<Type>, // env[i] is $i
+    pub env: Vec<Type>, // env[i] is $i
     pub parent: Option<Idx>, // parent of the hole - either the hole is the child of a lam or the right side of an app
 }
 
 impl Hole {
-    fn new(tp: Type, env: VecDeque<Type>, parent: Option<Idx>) -> Hole {
+    fn new(tp: Type, env: Vec<Type>, parent: Option<Idx>) -> Hole {
         Hole {tp, env, parent}
     }
 }
@@ -221,7 +221,7 @@ impl Expansion {
             let mut new_hole_env = hole.env.clone();
             if arg_tp.is_arrow(&expr.ctx) {
                 for inner_arg_tp in arg_tp.iter_args(&expr.ctx) {
-                    new_hole_env.push_front(inner_arg_tp);
+                    new_hole_env.insert(0, inner_arg_tp);
                     let lam_idx = expr.expr.add(Node::Lam(HOLE));
                     // adjust pointers so the previous app or lam we created points to this
                     expr.expr.get_mut(idx).expand_right(lam_idx);
@@ -323,12 +323,20 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
         strip_lambdas(track)
     });
 
+    // sort for determinism
+    let mut all_tasks = all_tasks.to_vec();
+    all_tasks.sort_by_key(|t|t.name.clone());
+
     let solutions: HashMap<TaskName, Vec<Solution>> = all_tasks.iter().map(|task| (task.name.clone(), vec![])).collect();
     
     let mut typeset = TypeSet::empty();
 
-    let unsolved_tasks: Vec<(Idx,Vec<TaskName>)> = all_tasks.iter().map(|task| (task.tp.clone(), task.name.clone())).into_group_map()
+    let mut unsolved_tasks: Vec<(Idx,Vec<TaskName>)> = all_tasks.iter().map(|task| (task.tp.clone(), task.name.clone())).into_group_map()
         .into_iter().map(|(tp,tasks)| (typeset.add_tp(&tp),tasks)).collect();
+    
+    // sort for determinism, though it might already be
+    unsolved_tasks.iter_mut().for_each(|(_,tasks)| tasks.sort());
+
     
     let tasks: HashMap<TaskName,Task<D>> = all_tasks.iter().map(|task| (task.name.clone(), task.clone())).collect();
 
@@ -403,7 +411,7 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
 #[derive(Debug, Clone)]
 pub struct WorkItem {
     tp: Type,
-    env: VecDeque<Type>,
+    env: Vec<Type>,
     tasks: Vec<TaskName>,
     upper_bound: NotNan<f32>,
     lower_bound: NotNan<f32>,
@@ -520,8 +528,9 @@ impl Iterator for SearchProgress {
         // if we want to wrap this in some lambdas and return it, then the outermost lambda should be the first type in
         // the list of arg types. This will be the *largest* de bruijn index within the body of the program, therefore
         // we should reverse the 
-        let mut env: VecDeque<Type> = if tp.is_arrow(&typeset) { tp.iter_args(&typeset).collect() } else { VecDeque::new() };
-        env.make_contiguous().reverse();
+        let mut env: Vec<Type> = if tp.is_arrow(&typeset) { tp.iter_args(&typeset).collect() } else { Vec::new() };
+        // env.make_contiguous().reverse();
+        env.reverse();
 
         let single_hole = PartialExpr::single_hole(tp.return_type(&typeset), env.clone(), typeset);
 
