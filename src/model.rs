@@ -95,7 +95,7 @@ impl<M: ProbabilisticModel> ProbabilisticModel for OrigamiModel<M> {
         // if we previously expanded with fix1(), then force next expansion (ie first argument) to be $0
         if let Some(Node::Prim(p)) = &expr.prev_prod {
             if *p == self.fix1 {
-                if let Node::Var(0) = prod {
+                if let Node::Var(0,-1) = prod {
                     // doesnt really matter what we set this to as long as its not -inf, itll get normalized to ll=0 and P=1 since all other productions will be -inf
                     return NotNan::new(-1.).unwrap();
                 } else {
@@ -106,7 +106,7 @@ impl<M: ProbabilisticModel> ProbabilisticModel for OrigamiModel<M> {
         // println!("{}", Expr::new(expr.expr.clone()).to_string_uncurried(expr.root.map(|u|u.into())));
 
         // we forbid the use of the very outermost argument if we used a fix1 at the top level
-        if let Node::Var(i) = prod {
+        if let Node::Var(i,-1) = prod {
             if *i+1 == hole.env.len() as i32 {
                 if expr.expr.len() != 0 {
                     if let Node::App(f,_) = expr.expr[0] {
@@ -165,7 +165,7 @@ impl ProbabilisticModel for UniformModel {
     // #[inline(always)]
     fn expansion_unnormalized_ll(&self, prod: &Node, _expr: &PartialExpr, _hole: &Hole) -> NotNan<f32> {
         match prod {
-            Node::Var(_) => self.var_ll,
+            Node::Var(_,_) => self.var_ll,
             Node::Prim(_) => self.prim_ll,
             _ => unreachable!()
         }

@@ -18,7 +18,7 @@ pub fn logsumexp(x: NotNan<f32>, y: NotNan<f32>) -> NotNan<f32> {
 pub fn strip_lambdas(s: &str) -> String {
     let mut e = ExprSet::empty(Order::ChildFirst, false, false);
     let mut idx = e.parse_extend(s).unwrap();
-    while let Node::Lam(b) = e.get(idx).node() {
+    while let Node::Lam(b,_) = e.get(idx).node() {
         idx = *b;
     }
     e.get(idx).to_string()

@@ -131,10 +131,12 @@ pub fn bottom_up<D: Domain>(
             // println!("trying fn: {}", dsl_entry.name);
 
             for (found_args, tp, cost) in ArgChoiceIterator::new(&vals_of_type, &seen_types, &dsl_entry.tp, *fn_cost, curr_cost, curr_cost - cfg.cost_step) {
-                let args: Vec<LazyVal<D>> = found_args.iter().map(|&f| LazyVal::new_strict(f.val.clone())).collect();
+                let args: Env<D> = Env::from(found_args.iter().map(|&f| f.val.clone()).collect());
                 // println!("trying ({} {})", dsl_entry.name, found_cfg.iter().map(|arg| format!("{:?}",arg.val)).collect::<Vec<_>>().join(" "));
-                if let Ok(val) = (D::lookup_fn_ptr(dsl_entry.name)) (args, &mut handle.as_eval(None)) {
-                    stats.num_eval_ok += 1;
+                // if let Ok(val) = (D::lookup_fn_ptr(dsl_entry.name)) (args, &mut handle.as_eval(None)) {
+                evaluator = &mut handle.as_eval(None);
+                if let Ok(val) = (evaluator.dsl.productions.get(&dsl_entry.name).unwrap().fn_ptr.unwrap() (args, evaluator)) {
+                        stats.num_eval_ok += 1;
                     match seen.get(&val) {
                         None => {
                             stats.num_not_seen += 1;

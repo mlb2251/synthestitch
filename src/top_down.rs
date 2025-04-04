@@ -194,7 +194,7 @@ impl Expansion {
         // instantiate if this wasnt a variable
         let (prod,prod_tp) = match self.prod {
             Prod::Prim(p, raw_tp_ref) => (Node::Prim(p), expr.ctx.instantiate(raw_tp_ref)),
-            Prod::Var(i, tp_ref) => (Node::Var(i), tp_ref),
+            Prod::Var(i, tp_ref) => (Node::Var(i,-1), tp_ref),
         };
         
         expr.ctx.unify(&hole.tp, &prod_tp.return_type(&expr.ctx)).unwrap();
@@ -222,7 +222,7 @@ impl Expansion {
             if arg_tp.is_arrow(&expr.ctx) {
                 for inner_arg_tp in arg_tp.iter_args(&expr.ctx) {
                     new_hole_env.insert(0, inner_arg_tp);
-                    let lam_idx = expr.expr.add(Node::Lam(HOLE));
+                    let lam_idx = expr.expr.add(Node::Lam(HOLE,-1));
                     // adjust pointers so the previous app or lam we created points to this
                     expr.expr.get_mut(idx).expand_right(lam_idx);
                     idx = lam_idx;
@@ -261,7 +261,7 @@ pub fn add_expansions(state: &mut ThreadState, prods: &[Prod], model: &impl Prob
 
         let (node,prod_tp) = match &prod {
             Prod::Prim(p, raw_tp_ref) => (Node::Prim(p.clone()), state.expr.ctx.instantiate(*raw_tp_ref)),
-            Prod::Var(i, tp_ref) => (Node::Var(*i), tp_ref.clone()),
+            Prod::Var(i, tp_ref) => (Node::Var(*i,-1), tp_ref.clone()),
         };
 
         let unnormalized_ll = model.expansion_unnormalized_ll(&node, &state.expr, &hole);
