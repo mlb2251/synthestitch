@@ -1,14 +1,16 @@
 # Synthestitch
 
 
+Run synthesis with 8 threads (should be ~4M expansion/s):
+```
+cargo run --release --bin=top_down -- data/origami/origami.json --threads 8
+```
+(defaults to 1 thread without the thread count)
+
+
 Make sure all solutions can be found in origami:
 ```
 cargo run --release --bin=top_down -- data/origami/origami.json --track-all=data/origami/origami_solutions.json
-```
-
-Search in origami:
-```
-cargo run --release --bin=top_down -- data/origami/origami.json
 ```
 
 Flamegraphing on a ~30s example:

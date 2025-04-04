@@ -18,10 +18,10 @@ itertools = "0.10.3"
 colorful = "0.2.1"
 rustc-hash = "1.1.0"
 ordered-float = "3.0.0"
-lambdas = "0.1.0"
+lambdas = "0.2.0"
 
 [patch.crates-io]
-lambdas = { git = "https://github.com/mlb2251/lambdas", branch = "main"}
+lambdas = { git = "https://github.com/mlb2251/lambdas", rev = "b8d4868fb2c7a132b43a84292d7d3271d8ad3d43"}
 # lambdas = { path = "../lambdas"}
 
 [profile.release]

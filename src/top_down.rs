@@ -1,7 +1,7 @@
 use clap::Parser;
 use itertools::Itertools;
 use serde::Serialize;
-use std::{collections::{VecDeque, HashMap},sync::{Mutex, Arc}, thread, fmt::{Display, Formatter}};
+use std::{collections::{HashMap},sync::{Mutex, Arc}, thread, fmt::{Display, Formatter}};
 use std::time::{Duration,Instant};
 use colorful::Colorful;
 use crate::*;
