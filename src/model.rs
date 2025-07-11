@@ -150,24 +150,35 @@ fn parent_and_arg_idx<'a>(expr: &'a PartialExpr, hole: &Hole) -> Option<(&'a Nod
 }
 
 #[derive(Clone,Debug)]
-pub struct UniformModel {
-    var_ll: NotNan<f32>,
-    prim_ll: NotNan<f32>,
+pub struct UnigramModel {
+    unigrams: std::collections::HashMap<String, f32>,
+    var_ll_fallback: NotNan<f32>,
+    prim_ll_fallback: NotNan<f32>
 }
 
-impl UniformModel {
-    pub fn new(var_ll: NotNan<f32>, prim_ll: NotNan<f32>) -> UniformModel {
-        UniformModel { var_ll, prim_ll }
+impl UnigramModel{
+    pub fn new(
+        unigrams: std::collections::HashMap<String, f32>,
+        var_ll_fallback: NotNan<f32>,
+        prim_ll_fallback: NotNan<f32>
+    ) -> UnigramModel{
+        UnigramModel{unigrams, var_ll_fallback, prim_ll_fallback}
     }
 }
 
-impl ProbabilisticModel for UniformModel {
+impl ProbabilisticModel for UnigramModel{
     // #[inline(always)]
     fn expansion_unnormalized_ll(&self, prod: &Node, _expr: &PartialExpr, _hole: &Hole) -> NotNan<f32> {
         match prod {
-            Node::Var(_,_) => self.var_ll,
-            Node::Prim(_) => self.prim_ll,
-            _ => unreachable!()
+            Node::Var(_,_) => self.var_ll_fallback,
+            Node::Prim(symbol) => {
+                if let Some(ll) = self.unigrams.get(&symbol.to_string()){
+                    NotNan::new(*ll).unwrap()
+                } else {
+                    self.prim_ll_fallback
+                }
+            }
+            _ => unreachable!() 
         }
     }
 }

@@ -35,6 +35,18 @@ pub struct Args {
 
     #[clap(flatten)]
     pub top_down_cfg: TopDownConfig,
+
+    /// Optional path to a JSON file with unigram probabilities
+    #[clap(long)]
+    pub unigrams_path: Option<String>,
+
+    /// Probability fallback for primitives
+    #[clap(long, default_value="0.0")]
+    pub primitive_fallback: f32,
+
+    /// Probability fallback for primitives
+    #[clap(long, default_value="0.0")]
+    pub variable_fallback: f32,
 }
 
 #[derive(Debug, Clone, ArgEnum, Serialize)]
@@ -72,7 +84,19 @@ fn main() {
 }
 
 fn run<D: Domain>(args: &Args) {
-    let model = uniform_model();
+    let unigrams: std::collections::HashMap<String, f32> = if let Some(path) = args.unigrams_path.as_ref() {
+        let json_str = std::fs::read_to_string(path)
+            .expect("Failed to read JSON file");
+        serde_json::from_str(&json_str)
+            .expect("Failed to parse JSON file")
+    } else {
+        std::collections::HashMap::new()
+    };  // get unigram probability table
+
+    let prim_ll_fallback = NotNan::new(args.primitive_fallback).unwrap();
+    let var_ll_fallback = NotNan::new(args.variable_fallback).unwrap();
+
+    let model = unigram_model(unigrams, prim_ll_fallback, var_ll_fallback);
     let dsl = D::new_dsl();
     let tasks: Vec<Task<D>> = args.file.as_ref().map(|path| parse_tasks(path,&dsl)).unwrap_or(vec![]);
 
@@ -115,26 +139,30 @@ fn run<D: Domain>(args: &Args) {
 }
 
 
-fn uniform_model() -> impl ProbabilisticModel {
-    OrigamiModel::new(
-        SymmetryRuleModel::new(
-                UniformModel::new(NotNan::new(0.).unwrap(),NotNan::new(0.).unwrap()),
-                 &[(0,"car","cons"), // arg_idx, parent, child
-                        (0,"car","empty"),
-                        (0,"cdr","cons"),
-                        (0,"cdr","empty"),
-                        (0,"+","0"),
-                        (1,"+","0"),
-                        (1,"-","0"),
-                        (0,"+","+"),
-                        (0,"*","*"),
-                        (0,"*","0"),
-                        (1,"*","0"),
-                        (0,"*","1"),
-                        (1,"*","1"),
-                        (0,"empty?","cons"),
-                        (0,"empty?","empty")]),
-        "fix1".into(),
-        "fix".into()
-    )
-}
+fn unigram_model(
+    unigrams: std::collections::HashMap<String, f32>,
+    var_ll_fallback: NotNan<f32>,
+    prim_ll_fallback: NotNan<f32>
+    ) -> impl ProbabilisticModel {
+        OrigamiModel::new(
+            SymmetryRuleModel::new(
+                    UnigramModel::new(unigrams, var_ll_fallback, prim_ll_fallback),
+                    &[(0,"car","cons"), // arg_idx, parent, child
+                            (0,"car","empty"),
+                            (0,"cdr","cons"),
+                            (0,"cdr","empty"),
+                            (0,"+","0"),
+                            (1,"+","0"),
+                            (1,"-","0"),
+                            (0,"+","+"),
+                            (0,"*","*"),
+                            (0,"*","0"),
+                            (1,"*","0"),
+                            (0,"*","1"),
+                            (1,"*","1"),
+                            (0,"empty?","cons"),
+                            (0,"empty?","empty")]),
+            "fix1".into(),
+            "fix".into()
+        )
+    }
