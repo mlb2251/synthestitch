@@ -1,7 +1,7 @@
 [
     {
         "name": "doubles",
-        "tp": "(Int -> Int)",
+        "tp": "(int -> int)",
         "ios": [
             [
                 [
@@ -30,8 +30,8 @@
         ]
     },
     {
-        "name": "power of two",
-        "tp": "(Int -> Int)",
+        "name": "squares",
+        "tp": "(int -> int)",
         "ios": [
             [
                 [
@@ -73,7 +73,7 @@
     },
     {
         "name": "subtraction by 1",
-        "tp": "(Int -> Int)",
+        "tp": "(int -> int)",
         "ios": [
             [
                 [
@@ -109,7 +109,7 @@
     },
     {
         "name": "even division by 2",
-        "tp":"(Int -> Int)",
+        "tp":"(int -> int)",
         "ios": [
             [
                 [

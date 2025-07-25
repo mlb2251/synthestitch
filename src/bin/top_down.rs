@@ -100,45 +100,45 @@ fn dispatch_model<D: Domain>(args: &Args){
                let model = uniform_model();
                run::<D, _>(args, &model)
         },
-        // ModelChoice::Unigram => {
-        //     let unigrams: std::collections::HashMap<String, f32> = if let Some(path) = args.unigrams_path.as_ref() {
-        //         let json_str = std::fs::read_to_string(path)
-        //             .expect("Failed to read JSON file");
-        //         serde_json::from_str(&json_str)
-        //             .expect("Failed to parse JSON file")
-        //     } else {
-        //         std::collections::HashMap::new()
-        //     };  // get unigram probability table
-
-        //     let prim_ll_fallback = NotNan::new(args.primitive_fallback).unwrap();
-        //     let var_ll_fallback = NotNan::new(args.variable_fallback).unwrap();
-        //     let model = unigram_model(unigrams, prim_ll_fallback, var_ll_fallback);
-        //     run::<D, _>(args, &model)
-        // }
-
         ModelChoice::Unigram => {
             let unigrams: std::collections::HashMap<String, f32> = if let Some(path) = args.unigrams_path.as_ref() {
                 let json_str = std::fs::read_to_string(path)
                     .expect("Failed to read JSON file");
-                let parsed: Value = serde_json::from_str(&json_str)
-                    .expect("Failed to parse JSON as Value");
-
-                if let Some(unigram_val) = parsed.get("unigrams") {
-                    serde_json::from_value(unigram_val.clone())
-                        .expect("Failed to extract 'unigrams' map")
-                } else {
-                    serde_json::from_value(parsed)
-                        .expect("Failed to parse flat JSON map as unigrams")
-                }
+                serde_json::from_str(&json_str)
+                    .expect("Failed to parse JSON file")
             } else {
                 std::collections::HashMap::new()
-            };
+            };  // get unigram probability table
 
             let prim_ll_fallback = NotNan::new(args.primitive_fallback).unwrap();
             let var_ll_fallback = NotNan::new(args.variable_fallback).unwrap();
             let model = unigram_model(unigrams, prim_ll_fallback, var_ll_fallback);
             run::<D, _>(args, &model)
         }
+
+        // ModelChoice::Unigram => {
+        //     let unigrams: std::collections::HashMap<String, f32> = if let Some(path) = args.unigrams_path.as_ref() {
+        //         let json_str = std::fs::read_to_string(path)
+        //             .expect("Failed to read JSON file");
+        //         let parsed: Value = serde_json::from_str(&json_str)
+        //             .expect("Failed to parse JSON as Value");
+
+        //         if let Some(unigram_val) = parsed.get("unigrams") {
+        //             serde_json::from_value(unigram_val.clone())
+        //                 .expect("Failed to extract 'unigrams' map")
+        //         } else {
+        //             serde_json::from_value(parsed)
+        //                 .expect("Failed to parse flat JSON map as unigrams")
+        //         }
+        //     } else {
+        //         std::collections::HashMap::new()
+        //     };
+
+        //     let prim_ll_fallback = NotNan::new(args.primitive_fallback).unwrap();
+        //     let var_ll_fallback = NotNan::new(args.variable_fallback).unwrap();
+        //     let model = unigram_model(unigrams, prim_ll_fallback, var_ll_fallback);
+        //     run::<D, _>(args, &model)
+        // }
 
     }
 }
@@ -248,25 +248,25 @@ fn unigram_model(
     var_ll_fallback: NotNan<f32>,
     prim_ll_fallback: NotNan<f32>
     ) -> impl ProbabilisticModel {
-        OrigamiModel::new(
-            SymmetryRuleModel::new(
-                    UnigramModel::new(unigrams, var_ll_fallback, prim_ll_fallback),
-                    &[(0,"car","cons"), // arg_idx, parent, child
-                            (0,"car","empty"),
-                            (0,"cdr","cons"),
-                            (0,"cdr","empty"),
-                            (0,"+","0"),
-                            (1,"+","0"),
-                            (1,"-","0"),
-                            (0,"+","+"),
-                            (0,"*","*"),
-                            (0,"*","0"),
-                            (1,"*","0"),
-                            (0,"*","1"),
-                            (1,"*","1"),
-                            (0,"empty?","cons"),
-                            (0,"empty?","empty")]),
-            "fix1".into(),
-            "fix".into()
-        )
+        // OrigamiModel::new(
+        //     SymmetryRuleModel::new(
+                    UnigramModel::new(unigrams, var_ll_fallback, prim_ll_fallback)
+        //             &[(0,"car","cons"), // arg_idx, parent, child
+        //                     (0,"car","empty"),
+        //                     (0,"cdr","cons"),
+        //                     (0,"cdr","empty"),
+        //                     (0,"+","0"),
+        //                     (1,"+","0"),
+        //                     (1,"-","0"),
+        //                     (0,"+","+"),
+        //                     (0,"*","*"),
+        //                     (0,"*","0"),
+        //                     (1,"*","0"),
+        //                     (0,"*","1"),
+        //                     (1,"*","1"),
+        //                     (0,"empty?","cons"),
+        //                     (0,"empty?","empty")]),
+        //     "fix1".into(),
+        //     "fix".into()
+        // )
     }

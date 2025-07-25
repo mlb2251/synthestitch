@@ -191,7 +191,13 @@ impl ProbabilisticModel for UnigramModel{
     // #[inline(always)]
     fn expansion_unnormalized_ll(&self, prod: &Node, _expr: &PartialExpr, _hole: &Hole) -> NotNan<f32> {
         match prod {
-            Node::Var(_,_) => self.var_ll_fallback,
+            Node::Var(_,_) => if let Some(ll) = self.unigrams.get("var"){
+                    // println!("Found symbol {:?} with ll={}", symbol, ll);
+                    NotNan::new(*ll).unwrap()
+                } else {
+                    // println!("Symbol {:?} not found, using fallback.", symbol);
+                    self.var_ll_fallback
+                },
             Node::Prim(symbol) => {
                 // println!("Looking up symbol in unigrams: {:?}", symbol);
                 // println!("DEBUG: symbol.to_string() = '{}'", symbol.to_string());

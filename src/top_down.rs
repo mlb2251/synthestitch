@@ -257,7 +257,7 @@ pub fn add_expansions(state: &mut ThreadState, prods: &[Prod], model: &impl Prob
         prods.iter().cloned()
         .chain(hole.env.iter().enumerate().map(|(i,tp)| Prod::Var(i as i32,*tp)))
     {
-        println!("{:?}", prod);
+        // println!("{:?}", prod);
 
         state.expr.ctx.load_state(ctx_save_state);
 
@@ -266,22 +266,22 @@ pub fn add_expansions(state: &mut ThreadState, prods: &[Prod], model: &impl Prob
             Prod::Var(i, tp_ref) => (Node::Var(*i,-1), tp_ref.clone()),
         };
 
-        println!("sgbcfuhwnfljn");
+        // println!("sgbcfuhwnfljn");
 
         let unnormalized_ll = model.expansion_unnormalized_ll(&node, &state.expr, &hole);
 
-        println!("{:?}", model);
+        // println!("{:?}", model);
         if unnormalized_ll == f32::NEG_INFINITY {
             continue // skip directly
         }
 
-        println!("duicbfbhahnl");
+        // println!("duicbfbhahnl");
         // unification check
         if !state.expr.ctx.unify(&hole_tp, &prod_tp.return_type(&state.expr.ctx)).is_ok() {
             continue;
         }
         
-        println!("vefvbknbvojgoijnlr");
+        // println!("vefvbknbvojgoijnlr");
 
         expansions_buf.push(Expansion::new(prod, unnormalized_ll))
     }
@@ -762,7 +762,7 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(thread_idx: usize, work_it
         state.expansions.pop().unwrap().apply(state);
         state.save_states.last_mut().unwrap().num_expansions -= 1;
 
-        if shared.cfg.verbose_worklist { println!("ABCTDfeq {} | holes: {}", state.expr, state.expr.holes.len()); }
+        // if shared.cfg.verbose_worklist { println!("ABCTDfeq {} | holes: {}", state.expr, state.expr.holes.len()); }
                 
         assert!(state.expr.ll > work_item.lower_bound);
 
@@ -823,7 +823,7 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(thread_idx: usize, work_it
 
 #[inline(never)]
 fn check_correctness<D: Domain, M: ProbabilisticModel>(shared: &Shared<D,M>, work_item: &WorkItem, expanded: &PartialExpr, local_stats: &mut LocalStats) -> Vec<TaskName> {
-    println!("{}", expanded);
+    // println!("{}", expanded);
     let mut solved_tasks: Vec<TaskName> = vec![];
 
     // debug_assert!(expanded.expr.get(0).infer::<D>(&mut Context::empty(), &mut (work_item.env.clone())).is_ok());
