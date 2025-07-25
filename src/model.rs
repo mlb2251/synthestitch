@@ -12,9 +12,7 @@ pub trait ProbabilisticModel: Clone + Send + Sync + std::fmt::Debug {
         // todo implement this recursively making use of expansion_unnormalized_ll
         unimplemented!()
     }
-
 }
-
 
 /// This wraps a model to make it behave roughly like the DreamCoder enumerator, which when it detects a fixpoint operator
 /// it give it 0% probability for using it lower in the program. Specifically what original DC does is
@@ -150,6 +148,29 @@ fn parent_and_arg_idx<'a>(expr: &'a PartialExpr, hole: &Hole) -> Option<(&'a Nod
 }
 
 #[derive(Clone,Debug)]
+pub struct UniformModel {
+    var_ll: NotNan<f32>,
+    prim_ll: NotNan<f32>,
+}
+
+impl UniformModel {
+    pub fn new(var_ll: NotNan<f32>, prim_ll: NotNan<f32>) -> UniformModel {
+        UniformModel { var_ll, prim_ll }
+    }
+}
+
+impl ProbabilisticModel for UniformModel {
+    // #[inline(always)]
+    fn expansion_unnormalized_ll(&self, prod: &Node, _expr: &PartialExpr, _hole: &Hole) -> NotNan<f32> {
+        match prod {
+            Node::Var(_,_) => self.var_ll,
+            Node::Prim(_) => self.prim_ll,
+            _ => unreachable!()
+        }
+    }
+}
+
+#[derive(Clone,Debug)]
 pub struct UnigramModel {
     unigrams: std::collections::HashMap<String, f32>,
     var_ll_fallback: NotNan<f32>,
@@ -172,9 +193,13 @@ impl ProbabilisticModel for UnigramModel{
         match prod {
             Node::Var(_,_) => self.var_ll_fallback,
             Node::Prim(symbol) => {
+                // println!("Looking up symbol in unigrams: {:?}", symbol);
+                // println!("DEBUG: symbol.to_string() = '{}'", symbol.to_string());
                 if let Some(ll) = self.unigrams.get(&symbol.to_string()){
+                    // println!("Found symbol {:?} with ll={}", symbol, ll);
                     NotNan::new(*ll).unwrap()
                 } else {
+                    // println!("Symbol {:?} not found, using fallback.", symbol);
                     self.prim_ll_fallback
                 }
             }

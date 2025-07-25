@@ -7,6 +7,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 use ordered_float::NotNan;
 use serde_json::de::from_reader;
+use serde_json::Value;
 use synthestitch::*;
 use lambdas::domains::simple::*;
 use lambdas::domains::prim_lists::*;
@@ -24,6 +25,10 @@ pub struct Args {
     /// json output file
     #[clap(short, long, parse(from_os_str), default_value = "out/out.json")]
     pub out: PathBuf,
+
+    /// Probabilistic Model to use
+    #[clap(short, long, arg_enum, default_value = "uniform")]
+    pub model: ModelChoice,
 
     /// Domain to enumerate from
     #[clap(short, long, arg_enum, default_value = "list")]
@@ -47,6 +52,12 @@ pub struct Args {
     /// Probability fallback for primitives
     #[clap(long, default_value="0.0")]
     pub variable_fallback: f32,
+}
+
+#[derive(Debug, Clone, ArgEnum, Serialize)]
+pub enum ModelChoice {
+    Uniform,
+    Unigram
 }
 
 #[derive(Debug, Clone, ArgEnum, Serialize)]
@@ -74,29 +85,98 @@ fn main() {
 
     match &args.domain {
         DomainChoice::Simple => {
-            run::<SimpleVal>(&args);
+            dispatch_model::<SimpleVal>(&args);
         },
         DomainChoice::List => {
-            run::<ListVal>(&args);
+            dispatch_model::<ListVal>(&args);
         },
     }
 
 }
 
-fn run<D: Domain>(args: &Args) {
-    let unigrams: std::collections::HashMap<String, f32> = if let Some(path) = args.unigrams_path.as_ref() {
-        let json_str = std::fs::read_to_string(path)
-            .expect("Failed to read JSON file");
-        serde_json::from_str(&json_str)
-            .expect("Failed to parse JSON file")
-    } else {
-        std::collections::HashMap::new()
-    };  // get unigram probability table
+fn dispatch_model<D: Domain>(args: &Args){
+    match &args.model {
+        ModelChoice::Uniform => {
+               let model = uniform_model();
+               run::<D, _>(args, &model)
+        },
+        // ModelChoice::Unigram => {
+        //     let unigrams: std::collections::HashMap<String, f32> = if let Some(path) = args.unigrams_path.as_ref() {
+        //         let json_str = std::fs::read_to_string(path)
+        //             .expect("Failed to read JSON file");
+        //         serde_json::from_str(&json_str)
+        //             .expect("Failed to parse JSON file")
+        //     } else {
+        //         std::collections::HashMap::new()
+        //     };  // get unigram probability table
 
-    let prim_ll_fallback = NotNan::new(args.primitive_fallback).unwrap();
-    let var_ll_fallback = NotNan::new(args.variable_fallback).unwrap();
+        //     let prim_ll_fallback = NotNan::new(args.primitive_fallback).unwrap();
+        //     let var_ll_fallback = NotNan::new(args.variable_fallback).unwrap();
+        //     let model = unigram_model(unigrams, prim_ll_fallback, var_ll_fallback);
+        //     run::<D, _>(args, &model)
+        // }
 
-    let model = unigram_model(unigrams, prim_ll_fallback, var_ll_fallback);
+        ModelChoice::Unigram => {
+            let unigrams: std::collections::HashMap<String, f32> = if let Some(path) = args.unigrams_path.as_ref() {
+                let json_str = std::fs::read_to_string(path)
+                    .expect("Failed to read JSON file");
+                let parsed: Value = serde_json::from_str(&json_str)
+                    .expect("Failed to parse JSON as Value");
+
+                if let Some(unigram_val) = parsed.get("unigrams") {
+                    serde_json::from_value(unigram_val.clone())
+                        .expect("Failed to extract 'unigrams' map")
+                } else {
+                    serde_json::from_value(parsed)
+                        .expect("Failed to parse flat JSON map as unigrams")
+                }
+            } else {
+                std::collections::HashMap::new()
+            };
+
+            let prim_ll_fallback = NotNan::new(args.primitive_fallback).unwrap();
+            let var_ll_fallback = NotNan::new(args.variable_fallback).unwrap();
+            let model = unigram_model(unigrams, prim_ll_fallback, var_ll_fallback);
+            run::<D, _>(args, &model)
+        }
+
+    }
+}
+
+fn run<D: Domain, M: ProbabilisticModel>(args: &Args, model : &M ) { 
+    // let model = match &args.model {
+    //     ModelChoice::Uniform => {
+    //         uniform_model()
+    //     },
+    //     ModelChoice::Unigram => {
+    //         let unigrams: std::collections::HashMap<String, f32> = if let Some(path) = args.unigrams_path.as_ref() {
+    //             let json_str = std::fs::read_to_string(path)
+    //                 .expect("Failed to read JSON file");
+    //             serde_json::from_str(&json_str)
+    //                 .expect("Failed to parse JSON file")
+    //         } else {
+    //             std::collections::HashMap::new()
+    //         };  // get unigram probability table
+
+    //         let prim_ll_fallback = NotNan::new(args.primitive_fallback).unwrap();
+    //         let var_ll_fallback = NotNan::new(args.variable_fallback).unwrap();
+    //         unigram_model(unigrams, prim_ll_fallback, var_ll_fallback)
+    //     }
+    // };
+
+    // let unigrams: std::collections::HashMap<String, f32> = if let Some(path) = args.unigrams_path.as_ref() {
+    //     let json_str = std::fs::read_to_string(path)
+    //         .expect("Failed to read JSON file");
+    //     serde_json::from_str(&json_str)
+    //         .expect("Failed to parse JSON file")
+    // } else {
+    //     std::collections::HashMap::new()
+    // };  // get unigram probability table
+
+    // let prim_ll_fallback = NotNan::new(args.primitive_fallback).unwrap();
+    // let var_ll_fallback = NotNan::new(args.variable_fallback).unwrap();
+    // let model = unigram_model(unigrams, prim_ll_fallback, var_ll_fallback);
+
     let dsl = D::new_dsl();
     let tasks: Vec<Task<D>> = args.file.as_ref().map(|path| parse_tasks(path,&dsl)).unwrap_or(vec![]);
 
@@ -111,7 +191,7 @@ fn run<D: Domain>(args: &Args) {
             cfg.one_soln = true;
             cfg.min_ll = Some(-100.);
             cfg.threads = 1;
-            let search_progress = top_down(&model, &dsl, &tasks, &cfg);
+            let search_progress = top_down(model, &dsl, &tasks, &cfg);
             let solns = search_progress.solutions;
             if solns[&task_name].is_empty() {
                 misses.push((task_name, target_soln));
@@ -135,9 +215,33 @@ fn run<D: Domain>(args: &Args) {
     }
 
 
-    top_down(&model, &dsl, &tasks, &args.top_down_cfg);
+    top_down(model, &dsl, &tasks, &args.top_down_cfg);
 }
 
+
+fn uniform_model() -> impl ProbabilisticModel {
+    // OrigamiModel::new(
+        // SymmetryRuleModel::new(
+                UniformModel::new(NotNan::new(0.).unwrap(),NotNan::new(0.).unwrap())//,
+                //  &[(0,"car","cons"), // arg_idx, parent, child
+                //         (0,"car","empty"),
+                //         (0,"cdr","cons"),
+                //         (0,"cdr","empty"),
+                //         (0,"+","0"),
+                //         (1,"+","0"),
+                //         (1,"-","0"),
+                //         (0,"+","+"),
+                //         (0,"*","*"),
+                //         (0,"*","0"),
+                //         (1,"*","0"),
+                //         (0,"*","1"),
+                //         (1,"*","1"),
+                //         (0,"empty?","cons"),
+                //         (0,"empty?","empty")]),
+    //     "fix1".into(),
+    //     "fix".into()
+    // )
+}
 
 fn unigram_model(
     unigrams: std::collections::HashMap<String, f32>,
