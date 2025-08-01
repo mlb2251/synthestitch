@@ -52,12 +52,17 @@ pub struct Args {
     /// Probability fallback for primitives
     #[clap(long, default_value="0.0")]
     pub variable_fallback: f32,
+
+    //Optional path to a JSOn file with bigram probabilities
+    #[clap(long)]
+    pub bigrams_path: Option<String>
 }
 
 #[derive(Debug, Clone, ArgEnum, Serialize)]
 pub enum ModelChoice {
     Uniform,
-    Unigram
+    Unigram,
+    Bigram
 }
 
 #[derive(Debug, Clone, ArgEnum, Serialize)]
@@ -112,71 +117,41 @@ fn dispatch_model<D: Domain>(args: &Args){
 
             let prim_ll_fallback = NotNan::new(args.primitive_fallback).unwrap();
             let var_ll_fallback = NotNan::new(args.variable_fallback).unwrap();
-            let model = unigram_model(unigrams, prim_ll_fallback, var_ll_fallback);
+            let model = unigram_model(unigrams, var_ll_fallback, prim_ll_fallback);
             run::<D, _>(args, &model)
         }
+        ModelChoice::Bigram => {
+            let bigrams: std::collections::HashMap<(String, usize, String), f32> = if let Some(path) = args.bigrams_path.as_ref() {
+                let json_str = std::fs::read_to_string(path)
+                    .expect("Failed to read bigram JSON file");
 
-        // ModelChoice::Unigram => {
-        //     let unigrams: std::collections::HashMap<String, f32> = if let Some(path) = args.unigrams_path.as_ref() {
-        //         let json_str = std::fs::read_to_string(path)
-        //             .expect("Failed to read JSON file");
-        //         let parsed: Value = serde_json::from_str(&json_str)
-        //             .expect("Failed to parse JSON as Value");
+                let raw: std::collections::HashMap<String, f32> = serde_json::from_str(&json_str)
+                    .expect("Failed to parse bigram JSON as flat string-keyed map");
 
-        //         if let Some(unigram_val) = parsed.get("unigrams") {
-        //             serde_json::from_value(unigram_val.clone())
-        //                 .expect("Failed to extract 'unigrams' map")
-        //         } else {
-        //             serde_json::from_value(parsed)
-        //                 .expect("Failed to parse flat JSON map as unigrams")
-        //         }
-        //     } else {
-        //         std::collections::HashMap::new()
-        //     };
 
-        //     let prim_ll_fallback = NotNan::new(args.primitive_fallback).unwrap();
-        //     let var_ll_fallback = NotNan::new(args.variable_fallback).unwrap();
-        //     let model = unigram_model(unigrams, prim_ll_fallback, var_ll_fallback);
-        //     run::<D, _>(args, &model)
-        // }
+                raw.into_iter()
+                    .map(|(key, value)| {
+                        let parts: Vec<&str> = key.split('|').collect();
+                        assert_eq!(parts.len(), 3, "Malformed bigram key: {}", key);
+                        let parent = parts[0].to_string();
+                        let arg_idx = parts[1].parse::<usize>()
+                            .expect("Invalid arg_idx in bigram key");
+                        let current = parts[2].to_string();
+                        ((parent, arg_idx, current), value)
+                    })
+                    .collect()
+                    }  else {
+                        std::collections::HashMap::new()
+                };
 
+            let fallback_ll = NotNan::new(args.primitive_fallback).unwrap();
+            let model = bigram_model(bigrams, fallback_ll);
+            run::<D, _>(args, &model)
+        }
     }
 }
 
 fn run<D: Domain, M: ProbabilisticModel>(args: &Args, model : &M ) { 
-    // let model = match &args.model {
-    //     ModelChoice::Uniform => {
-    //         uniform_model()
-    //     },
-    //     ModelChoice::Unigram => {
-    //         let unigrams: std::collections::HashMap<String, f32> = if let Some(path) = args.unigrams_path.as_ref() {
-    //             let json_str = std::fs::read_to_string(path)
-    //                 .expect("Failed to read JSON file");
-    //             serde_json::from_str(&json_str)
-    //                 .expect("Failed to parse JSON file")
-    //         } else {
-    //             std::collections::HashMap::new()
-    //         };  // get unigram probability table
-
-    //         let prim_ll_fallback = NotNan::new(args.primitive_fallback).unwrap();
-    //         let var_ll_fallback = NotNan::new(args.variable_fallback).unwrap();
-    //         unigram_model(unigrams, prim_ll_fallback, var_ll_fallback)
-    //     }
-    // };
-
-    // let unigrams: std::collections::HashMap<String, f32> = if let Some(path) = args.unigrams_path.as_ref() {
-    //     let json_str = std::fs::read_to_string(path)
-    //         .expect("Failed to read JSON file");
-    //     serde_json::from_str(&json_str)
-    //         .expect("Failed to parse JSON file")
-    // } else {
-    //     std::collections::HashMap::new()
-    // };  // get unigram probability table
-
-    // let prim_ll_fallback = NotNan::new(args.primitive_fallback).unwrap();
-    // let var_ll_fallback = NotNan::new(args.variable_fallback).unwrap();
-    // let model = unigram_model(unigrams, prim_ll_fallback, var_ll_fallback);
-
     let dsl = D::new_dsl();
     let tasks: Vec<Task<D>> = args.file.as_ref().map(|path| parse_tasks(path,&dsl)).unwrap_or(vec![]);
 
@@ -251,6 +226,33 @@ fn unigram_model(
         // OrigamiModel::new(
         //     SymmetryRuleModel::new(
                     UnigramModel::new(unigrams, var_ll_fallback, prim_ll_fallback)
+        //             &[(0,"car","cons"), // arg_idx, parent, child
+        //                     (0,"car","empty"),
+        //                     (0,"cdr","cons"),
+        //                     (0,"cdr","empty"),
+        //                     (0,"+","0"),
+        //                     (1,"+","0"),
+        //                     (1,"-","0"),
+        //                     (0,"+","+"),
+        //                     (0,"*","*"),
+        //                     (0,"*","0"),
+        //                     (1,"*","0"),
+        //                     (0,"*","1"),
+        //                     (1,"*","1"),
+        //                     (0,"empty?","cons"),
+        //                     (0,"empty?","empty")]),
+        //     "fix1".into(),
+        //     "fix".into()
+        // )
+    }
+
+fn bigram_model(
+    bigrams: std::collections::HashMap<(String, usize, String), f32>,
+    fallback_ll: NotNan<f32>,
+    ) -> impl ProbabilisticModel {
+        // OrigamiModel::new(
+        //     SymmetryRuleModel::new(
+                    BigramModel::new(bigrams, fallback_ll)
         //             &[(0,"car","cons"), // arg_idx, parent, child
         //                     (0,"car","empty"),
         //                     (0,"cdr","cons"),
