@@ -1,0 +1,7 @@
+{
+    "_comment": "Encourage map over sum",
+  "map|0|lam": 2.0,
+  "map|1|[]": 1.0,
+  "sum|0|[]": -1.0,
+  "map|1|var": -0.5
+}
