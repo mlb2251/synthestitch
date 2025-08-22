@@ -581,6 +581,8 @@ fn search_worker<D: Domain, M: ProbabilisticModel>(shared: Arc<Shared<D,M>>, thr
         let mut new_state = None;
         let mut all_done = true;
 
+        let initial_num_steals = {shared.stats.lock().unwrap().num_steals};
+
         // try work stealing
         for state in shared.thread_states.iter() {
             // LOCK SAFETY: lock will drop at end of for-loop, and we aren't currently holding any locks and will not take
@@ -622,6 +624,10 @@ fn search_worker<D: Domain, M: ProbabilisticModel>(shared: Arc<Shared<D,M>>, thr
                 }
             }
         }
+
+        all_done &= initial_num_steals == {
+            shared.stats.lock().unwrap().num_steals
+        };
 
         if all_done && thread_idx == 0 {
 

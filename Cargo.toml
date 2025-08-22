@@ -21,8 +21,8 @@ ordered-float = "3.0.0"
 lambdas = "0.2.0"
 
 [patch.crates-io]
-# lambdas = { git = "https://github.com/mlb2251/lambdas", rev = "b8d4868fb2c7a132b43a84292d7d3271d8ad3d43"}
-lambdas = { path = "../lambdas"}
+lambdas = { git = "https://github.com/mlb2251/lambdas", rev = "b8d4868fb2c7a132b43a84292d7d3271d8ad3d43"}
+# lambdas = { path = "../lambdas"}
 
 [profile.release]
 debug = true # for flamegraphs
