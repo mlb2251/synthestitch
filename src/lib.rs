@@ -22,6 +22,7 @@ use std::path::PathBuf;
 use serde_json::de::from_reader;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+// use lambdas::{DSL, Domain};
 use lambdas::domains::simple::*;
 use lambdas::domains::prim_lists::*;
 
@@ -97,23 +98,16 @@ fn parse_tracked(path: &dyn AsRef<Path>) -> Vec<(TaskName,String)> {
     task_soln
 }
 
-pub fn dispatch_domain(args: &Args) -> String {
-
-    match &args.domain {
-        DomainChoice::Simple => {
-            return dispatch_model::<SimpleVal>(args);
-        },
-        DomainChoice::List => {
-            return dispatch_model::<ListVal>(args);
-        },
-    }
+pub fn dispatch_domain_simple(args: &Args, reg_dsl: &DSL<SimpleVal>) -> String {
+    dispatch_model::<SimpleVal>(args, reg_dsl)
 }
 
-fn dispatch_model<D: Domain>(args: &Args) -> String {
+
+fn dispatch_model<D: Domain>(args: &Args, reg_dsl: &DSL<D>) -> String {
     match &args.model {
         ModelChoice::Uniform => {
                let model = uniform_model();
-               run::<D, _>(args, &model)
+               run::<D, _>(args, &model, reg_dsl)
         },
         ModelChoice::Unigram => {
             let unigrams: std::collections::HashMap<String, f32> = if let Some(path) = args.unigrams_path.as_ref() {
@@ -128,7 +122,7 @@ fn dispatch_model<D: Domain>(args: &Args) -> String {
             let prim_ll_fallback = NotNan::new(args.primitive_fallback).unwrap();
             let var_ll_fallback = NotNan::new(args.variable_fallback).unwrap();
             let model = unigram_model(unigrams, var_ll_fallback, prim_ll_fallback);
-            run::<D, _>(args, &model)
+            run::<D, _>(args, &model, reg_dsl)
         }
         ModelChoice::Bigram => {
             let bigrams: std::collections::HashMap<(String, usize, String), f32> = if let Some(path) = args.bigrams_path.as_ref() {
@@ -156,13 +150,13 @@ fn dispatch_model<D: Domain>(args: &Args) -> String {
 
             let fallback_ll = NotNan::new(args.primitive_fallback).unwrap();
             let model = bigram_model(bigrams, fallback_ll);
-            run::<D, _>(args, &model)
+            run::<D, _>(args, &model, reg_dsl)
         }
     }
 }
 
-fn run<D: Domain, M: ProbabilisticModel>(args: &Args, model : &M ) -> String { 
-    let dsl = D::new_dsl();
+fn run<D: Domain, M: ProbabilisticModel>(args: &Args, model : &M, reg_dsl : &DSL<D>) -> String { 
+    let dsl = reg_dsl;//D::new_dsl();
     let tasks: Vec<Task<D>> = args.file.as_ref().map(|path| parse_tasks(path,&dsl)).unwrap_or(vec![]);
 
     if let Some(track_all) =  &args.track_all {

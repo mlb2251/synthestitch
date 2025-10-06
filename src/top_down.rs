@@ -684,7 +684,7 @@ fn search_worker<D: Domain, M: ProbabilisticModel>(shared: Arc<Shared<D,M>>, thr
 
                     let all_solutions = search_progress.solutions.get_mut(&soln.task_name).unwrap();
 
-                    if all_solutions.len() == 1 {
+                    if all_solutions.len() == 0 {
                         // LOCK SAFETY: in no part of the code do we take the search progress lock while already holding the stats lock
                         let mut stats = shared.stats.lock().unwrap();
                         stats.num_never_solved -= 1;
