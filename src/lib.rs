@@ -22,9 +22,11 @@ use std::path::PathBuf;
 use serde_json::de::from_reader;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-// use lambdas::{DSL, Domain};
+use lambdas::{DSL, Domain};
 use lambdas::domains::simple::*;
 use lambdas::domains::prim_lists::*;
+use lambdas::domains::py::*;
+use lambdas::domains::py::PyVal;
 
 
 /// Synthesizer
@@ -83,7 +85,8 @@ pub enum ModelChoice {
 #[derive(Debug, Clone, ArgEnum, Serialize)]
 pub enum DomainChoice {
     List,
-    Simple
+    Simple,
+    Python
 }
 
 #[derive(Debug, Clone, ArgEnum, Serialize)]
@@ -98,12 +101,31 @@ fn parse_tracked(path: &dyn AsRef<Path>) -> Vec<(TaskName,String)> {
     task_soln
 }
 
-pub fn dispatch_domain_simple(args: &Args, reg_dsl: &DSL<SimpleVal>) -> String {
-    dispatch_model::<SimpleVal>(args, reg_dsl)
+pub fn dispatch_domain(args: &Args, reg_dsl: Option<&DSL<PyVal>>) -> String {
+
+    match &args.domain {
+        DomainChoice::Simple => {
+            return dispatch_model::<SimpleVal>(args, None);
+        },
+        DomainChoice::List => {
+            return dispatch_model::<ListVal>(args, None);
+        },
+        DomainChoice::Python => {
+            return dispatch_model::<PyVal>(args, reg_dsl);
+        },
+    }
 }
 
+// pub fn dispatch_domain_simple(args: &Args, reg_dsl: &DSL<SimpleVal>) -> String {
+//     dispatch_model::<SimpleVal>(args, reg_dsl)
+// }
 
-fn dispatch_model<D: Domain>(args: &Args, reg_dsl: &DSL<D>) -> String {
+// pub fn dispatch_domain_py(args: &Args, reg_dsl: &DSL<PyVal>) -> String {
+//     dispatch_model::<PyVal>(args, reg_dsl)
+// }
+
+
+fn dispatch_model<D: Domain>(args: &Args, reg_dsl: Option<&DSL<D>>) -> String {
     match &args.model {
         ModelChoice::Uniform => {
                let model = uniform_model();
@@ -155,8 +177,14 @@ fn dispatch_model<D: Domain>(args: &Args, reg_dsl: &DSL<D>) -> String {
     }
 }
 
-fn run<D: Domain, M: ProbabilisticModel>(args: &Args, model : &M, reg_dsl : &DSL<D>) -> String { 
-    let dsl = reg_dsl;//D::new_dsl();
+fn run<D: Domain, M: ProbabilisticModel>(args: &Args, model : &M, reg_dsl : Option<&DSL<D>>) -> String {
+    let native_dsl = D::new_dsl();
+    let dsl = match reg_dsl {
+        Some(d) => reg_dsl.unwrap(),
+        None => &native_dsl
+    };
+    
+    //reg_dsl;//D::new_dsl();
     let tasks: Vec<Task<D>> = args.file.as_ref().map(|path| parse_tasks(path,&dsl)).unwrap_or(vec![]);
 
     if let Some(track_all) =  &args.track_all {
