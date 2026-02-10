@@ -1,7 +1,7 @@
 use clap::Parser;
 use itertools::Itertools;
 use serde::Serialize;
-use std::{collections::HashMap, fmt::{Display, Formatter}, panic, sync::{Arc, Mutex}, thread};
+use std::{cell::Cell, collections::HashMap, fmt::{Display, Formatter}, panic, sync::{Arc, Mutex}, thread};
 use std::time::{Duration,Instant};
 use colorful::Colorful;
 use crate::*;
@@ -480,12 +480,15 @@ impl SearchProgress {
 impl Iterator for SearchProgress {
     type Item = (WorkItem,PartialExpr);
     fn next(&mut self) -> Option<Self::Item> {
-
         let unsolved_tasks = &mut self.unsolved_tasks;
+        println!("Initial pointer = {}, Tasks =  {:?}", self.curr, unsolved_tasks);
+        
         let all_solutions = &self.solutions;
         let num_solns = self.cfg.num_solns;
+        // let mut to_drop = vec![];
 
-        unsolved_tasks.retain_mut(|(_tp,tasks)| {
+        for i in 0..unsolved_tasks.len() {
+            let tasks = &mut unsolved_tasks[i].1;
             tasks.retain(|task| {
                 let solns = all_solutions.get(task).unwrap();
                 // retain if not enough solutions
@@ -499,11 +502,50 @@ impl Iterator for SearchProgress {
             // retain if there are tasks remaining
             if tasks.is_empty() {
                 println!("{}: <type>", "Done enumerating for type".green());
-                false
+
+                if i <= self.curr {
+                    self.curr -= 1;
+                }
+                // to_drop.push(true);
             } else {
-                true
+                // to_drop.push(false);
             }
-        });
+
+        }
+
+        unsolved_tasks.retain(|(_tp, tasks)| !tasks.is_empty());
+
+        println!("Final pointer = {}, Tasks =  {:?}", self.curr, unsolved_tasks);
+
+        // unsolved_task
+
+        // unsolved_tasks.retain_mut(|(_tp,tasks)| {
+        //     tasks.retain(|task| {
+        //         let solns = all_solutions.get(task).unwrap();
+        //         // retain if not enough solutions
+        //         if solns.len() >= num_solns {
+        //             println!("{}: {}", "Done enumerating for task".green(), task);
+        //             false
+        //         } else {
+        //             true
+        //         }
+        //     });
+        //     let i = idx.get();
+        //     // retain if there are tasks remaining
+        //     let res = if tasks.is_empty() {
+        //         println!("{}: <type>", "Done enumerating for type".green());
+
+        //         if curr <= i {
+        //             curr -= 1;
+        //         }
+
+        //         false
+        //     } else {
+        //         true
+        //     };
+        //     idx.set(i + 1);
+        //     return res;
+        // });
 
         if self.unsolved_tasks.is_empty() {
             return None

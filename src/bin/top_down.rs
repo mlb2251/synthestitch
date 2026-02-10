@@ -8,6 +8,6 @@ fn main() {
             eprintln!("{err}");
             std::process::exit(1);
         });
-
-    //dispatch_domain(&args);
+  
+    dispatch_domain(&args, None);
 }
