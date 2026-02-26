@@ -18,10 +18,11 @@ itertools = "0.10.3"
 colorful = "0.2.1"
 rustc-hash = "1.1.0"
 ordered-float = "3.0.0"
-lambdas = "0.2.0"
+lambdas = { git = "https://github.com/mlb2251/lambdas", rev = "26fd0c4aaf9656ac5711a0871eb49993014df175", features= ["python"]}
+pyo3 = {version = "0.25", features = ["auto-initialize"]}
 
-[patch.crates-io]
-lambdas = { git = "https://github.com/mlb2251/lambdas", rev = "b8d4868fb2c7a132b43a84292d7d3271d8ad3d43"}
+# [patch.crates-io]
+# lambdas = { git = "https://github.com/mlb2251/lambdas", rev = "26fd0c4aaf9656ac5711a0871eb49993014df175", features= ["python"]}
 # lambdas = { path = "../lambdas"}
 
 [profile.release]
