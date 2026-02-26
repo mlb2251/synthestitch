@@ -202,7 +202,7 @@ impl Expansion {
         expr.ll = self.ll;
         expr.prev_prod = Some(prod.clone());
 
-        let mut to_expand: Option<Idx> = hole.parent.clone();
+        let mut to_expand: Option<Idx> = hole.parent;
 
         // add a new hole for each arg, along with any apps and lams
         for arg_idx in (0..prod_tp.arity(&expr.ctx)).rev() {
@@ -230,7 +230,7 @@ impl Expansion {
             }
 
             // the hole type is the return type of the arg (bc all lambdas were autofilled)
-            let new_hole_tp = arg_tp.return_type(&expr.ctx).clone();
+            let new_hole_tp = arg_tp.return_type(&expr.ctx);
             expr.holes.push(Hole::new(new_hole_tp, new_hole_env, Some(idx)))
         }
 
@@ -263,7 +263,7 @@ pub fn add_expansions(state: &mut ThreadState, prods: &[Prod], model: &impl Prob
 
         let (node,prod_tp) = match &prod {
             Prod::Prim(p, raw_tp_ref) => (Node::Prim(p.clone()), state.expr.ctx.instantiate(*raw_tp_ref)),
-            Prod::Var(i, tp_ref) => (Node::Var(*i,-1), tp_ref.clone()),
+            Prod::Var(i, tp_ref) => (Node::Var(*i,-1), *tp_ref),
         };
 
         // println!("sgbcfuhwnfljn");
@@ -277,7 +277,7 @@ pub fn add_expansions(state: &mut ThreadState, prods: &[Prod], model: &impl Prob
 
         // println!("duicbfbhahnl");
         // unification check
-        if !state.expr.ctx.unify(&hole_tp, &prod_tp.return_type(&state.expr.ctx)).is_ok() {
+        if state.expr.ctx.unify(&hole_tp, &prod_tp.return_type(&state.expr.ctx)).is_err() {
             continue;
         }
         
@@ -417,8 +417,8 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
 
 #[derive(Debug, Clone)]
 pub struct WorkItem {
-    tp: Type,
-    env: Vec<Type>,
+    // tp: Type,
+    // env: Vec<Type>,
     tasks: Vec<TaskName>,
     upper_bound: NotNan<f32>,
     lower_bound: NotNan<f32>,
@@ -462,7 +462,7 @@ impl SearchProgress {
         }
         let mut tasks: Vec<TaskName> = self.solutions.keys().cloned().collect();
         tasks.sort();
-        s += &format!("Solutions:");
+        s += "Solutions:";
         for name in &tasks {
             let solns = &self.solutions[name];
             if solns.is_empty() {
@@ -584,8 +584,8 @@ impl Iterator for SearchProgress {
         let single_hole = PartialExpr::single_hole(tp.return_type(&typeset), env.clone(), typeset);
 
         let work_item = WorkItem {
-            tp,
-            env,
+            // tp,
+            // env,
             tasks: tasks.clone(),
             upper_bound: self.curr_upper_bound,
             lower_bound: self.curr_upper_bound - self.cfg.step,
@@ -832,7 +832,7 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(thread_idx: usize, work_it
             }
             local_stats.num_finished += 1;
 
-            let solved_tasks = check_correctness(&shared, &work_item, &state.expr, &mut local_stats);
+            let solved_tasks = check_correctness(shared, &work_item, &state.expr, &mut local_stats);
 
             for task_name in solved_tasks {
 
@@ -862,7 +862,7 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(thread_idx: usize, work_it
     }
 
     // lock scope
-    { shared.stats.lock().unwrap().local.transfer(&mut local_stats) };
+    shared.stats.lock().unwrap().local.transfer(&mut local_stats);
     // lock scope
     { *shared.thread_states[thread_idx].lock().unwrap() = None; }
     solutions

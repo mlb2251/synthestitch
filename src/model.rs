@@ -67,7 +67,7 @@ impl<M: ProbabilisticModel> ProbabilisticModel for OrigamiModel<M> {
     // #[inline(always)]
     fn expansion_unnormalized_ll(&self, prod: &Node, expr: &PartialExpr, hole: &Hole) -> NotNan<f32> {
         // if this is not the very first expansion, we forbid the fix1() operator
-        if expr.expr.len() != 0 {
+        if !expr.expr.is_empty() {
             if let Node::Prim(p) = prod  {
                 if *p == self.fix1 {    
                     return NotNan::new(f32::NEG_INFINITY).unwrap();
@@ -76,7 +76,7 @@ impl<M: ProbabilisticModel> ProbabilisticModel for OrigamiModel<M> {
         }
 
         // if this is the very first expansion, we require it to be the fix1() operator
-        if expr.expr.len() == 0  {
+        if expr.expr.is_empty()  {
             if let Node::Prim(p) = prod  {
                 if *p != self.fix1 {    
                     return NotNan::new(f32::NEG_INFINITY).unwrap();
@@ -105,8 +105,8 @@ impl<M: ProbabilisticModel> ProbabilisticModel for OrigamiModel<M> {
 
         // we forbid the use of the very outermost argument if we used a fix1 at the top level
         if let Node::Var(i,-1) = prod {
-            if *i+1 == hole.env.len() as i32 {
-                if expr.expr.len() != 0 {
+            if *i+1 == hole.env.len() as i32
+                && !expr.expr.is_empty() {
                     if let Node::App(f,_) = expr.expr[0] {
                         if let Node::App(f,_) = expr.expr[f] {
                             if expr.expr[f] == Node::Prim(self.fix1.clone()) {
@@ -115,7 +115,6 @@ impl<M: ProbabilisticModel> ProbabilisticModel for OrigamiModel<M> {
                         }
                     }
                 }
-            }
         }
 
 
@@ -128,9 +127,7 @@ impl<M: ProbabilisticModel> ProbabilisticModel for OrigamiModel<M> {
 /// who is the parent of the hole and which child are we of it. Doesnt handle higher order stuff.
 /// bc we didnt need that to replicate the dreamcoder symmetry rules
 fn parent_and_arg_idx<'a>(expr: &'a PartialExpr, hole: &Hole) -> Option<(&'a Node, usize)> {
-    if hole.parent.is_none() {
-        return None
-    }
+    hole.parent?;
     if let Node::App(f,_) = expr.expr[hole.parent.unwrap()] {
         let mut arg_idx = 0;
         let mut func = f;
@@ -143,7 +140,7 @@ fn parent_and_arg_idx<'a>(expr: &'a PartialExpr, hole: &Hole) -> Option<(&'a Nod
             }
         }
     } else {
-        return None // we dont handle Lams
+        None // we dont handle Lams
     }
 }
 
