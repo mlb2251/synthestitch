@@ -410,8 +410,8 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
 
 #[derive(Debug, Clone)]
 pub struct WorkItem {
-    tp: Type,
-    env: Vec<Type>,
+    // tp: Type,
+    // env: Vec<Type>,
     tasks: Vec<TaskName>,
     upper_bound: NotNan<f32>,
     lower_bound: NotNan<f32>,
@@ -535,8 +535,8 @@ impl Iterator for SearchProgress {
         let single_hole = PartialExpr::single_hole(tp.return_type(&typeset), env.clone(), typeset);
 
         let work_item = WorkItem {
-            tp,
-            env,
+            // tp,
+            // env,
             tasks: tasks.clone(),
             upper_bound: self.curr_upper_bound,
             lower_bound: self.curr_upper_bound - self.cfg.step,
