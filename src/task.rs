@@ -41,7 +41,7 @@ pub fn parse_tasks<D: Domain>(path: &dyn AsRef<Path>, dsl: &DSL<D>) -> Vec<Task<
                 let output: String = io.as_array().unwrap()[1].as_str().unwrap().to_string();
                 IO::new(
                     // remove all spaces since prims cant have spaces within them
-                    inputs.iter().map(|i| dsl.val_of_prim(&i.replace(" ", "").into()).unwrap_or_else(|| panic!("failed to parse {i} as a Val"))).collect(),
+                    inputs.iter().map(|i| dsl.val_of_prim(&i.replace(" ", "").into()).unwrap_or_else(|| panic!("{}", "failed to parse {i} as a Val"))).collect(),
                     dsl.val_of_prim(&output.replace(" ", "").into()).unwrap()
                 )
             }).collect(),

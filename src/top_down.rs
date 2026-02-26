@@ -455,7 +455,7 @@ impl SearchProgress {
         }
         let mut tasks: Vec<TaskName> = self.solutions.keys().cloned().collect();
         tasks.sort();
-        s += &"Solutions:".to_string();
+        s += "Solutions:";
         for name in &tasks {
             let solns = &self.solutions[name];
             if solns.is_empty() {
