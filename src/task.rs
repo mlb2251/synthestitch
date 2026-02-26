@@ -34,14 +34,14 @@ pub fn parse_tasks<D: Domain>(path: &dyn AsRef<Path>, dsl: &DSL<D>) -> Vec<Task<
     let json: serde_json::Value = from_reader(File::open(path).expect("file not found")).expect("json deserializing error");
     let tasks: Vec<Task<D>> = json.as_array().unwrap().iter().map(|task| {
         Task::new(
-            task["name"].as_str().unwrap().into(),
+            task["name"].as_str().unwrap(),
             task["tp"].as_str().unwrap().parse().unwrap(),
             task["ios"].as_array().unwrap().iter().map(|io| {
                 let inputs: Vec<String> = io.as_array().unwrap()[0].as_array().unwrap().iter().map(|i| i.as_str().unwrap().to_string()).collect();
                 let output: String = io.as_array().unwrap()[1].as_str().unwrap().to_string();
                 IO::new(
                     // remove all spaces since prims cant have spaces within them
-                    inputs.iter().map(|i| dsl.val_of_prim(&i.replace(" ", "").into()).expect(&format!("failed to parse {i} as a Val"))).collect(),
+                    inputs.iter().map(|i| dsl.val_of_prim(&i.replace(" ", "").into()).unwrap_or_else(|| panic!("{}", "failed to parse {i} as a Val"))).collect(),
                     dsl.val_of_prim(&output.replace(" ", "").into()).unwrap()
                 )
             }).collect(),
