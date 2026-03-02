@@ -19,8 +19,6 @@ use clap::{Parser,ArgEnum};
 use serde::Serialize;
 use std::path::PathBuf;
 use serde_json::de::from_reader;
-use lambdas::domains::simple::*;
-use lambdas::domains::prim_lists::*;
 
 
 
