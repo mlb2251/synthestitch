@@ -13,7 +13,6 @@ pub use {
 };
 
 use colorful::Colorful;
-// use top_down::*;
 use std::fs::File;
 use std::path::Path;
 use clap::{Parser,ArgEnum};
@@ -34,8 +33,6 @@ use lambdas::domains::py::PyVal;
 #[clap(name = "Synthesizer")]
 pub struct Args {
     /// json input file
-    // #[clap(parse(from_os_str))]
-    // pub file: Option<PathBuf>,
     #[clap(long, parse(from_os_str))]
     pub file: Option<std::path::PathBuf>,
 
