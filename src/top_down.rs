@@ -478,8 +478,7 @@ impl Iterator for SearchProgress {
         let all_solutions = &self.solutions;
         let num_solns = self.cfg.num_solns;
 
-        for i in 0..unsolved_tasks.len() {
-            let tasks = &mut unsolved_tasks[i].1;
+        for (i, (_, tasks)) in unsolved_tasks.iter_mut().enumerate() {
             tasks.retain(|task| {
                 let solns = all_solutions.get(task).unwrap();
                 // retain if not enough solutions
