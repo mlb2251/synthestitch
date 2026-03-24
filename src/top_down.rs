@@ -474,7 +474,6 @@ impl Iterator for SearchProgress {
     type Item = (WorkItem,PartialExpr);
     fn next(&mut self) -> Option<Self::Item> {
         let unsolved_tasks = &mut self.unsolved_tasks;
-        println!("Initial pointer = {}, Tasks =  {:?}", self.curr, unsolved_tasks);
         
         let all_solutions = &self.solutions;
         let num_solns = self.cfg.num_solns;
@@ -498,16 +497,10 @@ impl Iterator for SearchProgress {
                 if i <= self.curr {
                     self.curr -= 1;
                 }
-                // to_drop.push(true);
-            } else {
-
             }
-
         }
 
         unsolved_tasks.retain(|(_tp, tasks)| !tasks.is_empty());
-
-        println!("Final pointer = {}, Tasks =  {:?}", self.curr, unsolved_tasks);
 
         if self.unsolved_tasks.is_empty() {
             return None
