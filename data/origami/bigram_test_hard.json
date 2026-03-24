@@ -1,0 +1,58 @@
+[
+  {
+    "name": "sum_double",
+    "tp": "(list int -> int)",
+    "ios": [
+      [["[1, 2, 3]"], "12"],
+      [["[0, 4]"], "8"]
+    ]
+  },
+  {
+    "name": "map_increment",
+    "tp": "(list int -> list int)",
+    "ios": [
+      [["[1, 2]"], "[2, 3]"],
+      [["[5, 10]"], "[6, 11]"]
+    ]
+  },
+  {
+    "name": "sum_identity",
+    "tp": "(list int -> int)",
+    "ios": [
+      [["[5, 5]"], "10"],
+      [["[1, 2, 3]"], "6"]
+    ]
+  },
+  {
+    "name": "map_constant_2",
+    "tp": "(list int -> list int)",
+    "ios": [
+      [["[4, 5]"], "[2, 2]"],
+      [["[]"], "[]"]
+    ]
+  },
+  {
+    "name": "sum_map_identity",
+    "tp": "(list int -> int)",
+    "ios": [
+      [["[1, 2, 3]"], "6"],
+      [["[7, 3]"], "10"]
+    ]
+  },
+  {
+    "name": "map_double_then_inc",
+    "tp": "(list int -> list int)",
+    "ios": [
+      [["[1, 2]"], "[3, 5]"],
+      [["[0, 3]"], "[1, 7]"]
+    ]
+  },
+  {
+    "name": "sum_map_double_then_inc",
+    "tp": "(list int -> int)",
+    "ios": [
+      [["[1, 2]"], "8"],
+      [["[0, 3]"], "8"]
+    ]
+  }
+]

@@ -1,0 +1,28 @@
+{
+  "solutions": {
+    "constant_2": [
+      "2"
+    ],
+    "double": [
+      "(* $0 2)"
+    ],
+    "double_list": [
+      "(map (lam (* $0 2)) $0)"
+    ],
+    "identity_list": [
+      "$0"
+    ],
+    "increment": [
+      "(+ $0 1)"
+    ],
+    "square": [
+      "(* $0 $0)"
+    ],
+    "sum_list": [
+      "(sum $0)"
+    ],
+    "zero_list": [
+      "(map (lam 0) $0)"
+    ]
+  }
+}
