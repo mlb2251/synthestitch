@@ -1,7 +1,7 @@
 use clap::Parser;
 use itertools::Itertools;
 use serde::Serialize;
-use std::{cell::Cell, collections::HashMap, fmt::{Display, Formatter}, panic, sync::{Arc, Mutex}, thread};
+use std::{collections::{HashMap},sync::{Mutex, Arc}, thread, fmt::{Display, Formatter}};
 use std::time::{Duration,Instant};
 use colorful::Colorful;
 use crate::*;
@@ -202,7 +202,7 @@ impl Expansion {
         expr.ll = self.ll;
         expr.prev_prod = Some(prod.clone());
 
-        let mut to_expand: Option<Idx> = hole.parent.clone();
+        let mut to_expand: Option<Idx> = hole.parent;
 
         // add a new hole for each arg, along with any apps and lams
         for arg_idx in (0..prod_tp.arity(&expr.ctx)).rev() {
@@ -230,7 +230,7 @@ impl Expansion {
             }
 
             // the hole type is the return type of the arg (bc all lambdas were autofilled)
-            let new_hole_tp = arg_tp.return_type(&expr.ctx).clone();
+            let new_hole_tp = arg_tp.return_type(&expr.ctx);
             expr.holes.push(Hole::new(new_hole_tp, new_hole_env, Some(idx)))
         }
 
@@ -261,7 +261,7 @@ pub fn add_expansions(state: &mut ThreadState, prods: &[Prod], model: &impl Prob
 
         let (node,prod_tp) = match &prod {
             Prod::Prim(p, raw_tp_ref) => (Node::Prim(p.clone()), state.expr.ctx.instantiate(*raw_tp_ref)),
-            Prod::Var(i, tp_ref) => (Node::Var(*i,-1), tp_ref.clone()),
+            Prod::Var(i, tp_ref) => (Node::Var(*i,-1), *tp_ref),
         };
 
         let unnormalized_ll = model.expansion_unnormalized_ll(&node, &state.expr, &hole);
@@ -271,7 +271,7 @@ pub fn add_expansions(state: &mut ThreadState, prods: &[Prod], model: &impl Prob
         }
 
         // unification check
-        if !state.expr.ctx.unify(&hole_tp, &prod_tp.return_type(&state.expr.ctx)).is_ok() {
+        if state.expr.ctx.unify(&hole_tp, &prod_tp.return_type(&state.expr.ctx)).is_err() {
             continue;
         }
         
@@ -410,8 +410,8 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
 
 #[derive(Debug, Clone)]
 pub struct WorkItem {
-    tp: Type,
-    env: Vec<Type>,
+    // tp: Type,
+    // env: Vec<Type>,
     tasks: Vec<TaskName>,
     upper_bound: NotNan<f32>,
     lower_bound: NotNan<f32>,
@@ -455,7 +455,7 @@ impl SearchProgress {
         }
         let mut tasks: Vec<TaskName> = self.solutions.keys().cloned().collect();
         tasks.sort();
-        s += &format!("Solutions:");
+        s += "Solutions:";
         for name in &tasks {
             let solns = &self.solutions[name];
             if solns.is_empty() {
@@ -478,7 +478,6 @@ impl Iterator for SearchProgress {
         
         let all_solutions = &self.solutions;
         let num_solns = self.cfg.num_solns;
-        // let mut to_drop = vec![];
 
         for i in 0..unsolved_tasks.len() {
             let tasks = &mut unsolved_tasks[i].1;
@@ -501,7 +500,7 @@ impl Iterator for SearchProgress {
                 }
                 // to_drop.push(true);
             } else {
-                // to_drop.push(false);
+
             }
 
         }
@@ -509,36 +508,6 @@ impl Iterator for SearchProgress {
         unsolved_tasks.retain(|(_tp, tasks)| !tasks.is_empty());
 
         println!("Final pointer = {}, Tasks =  {:?}", self.curr, unsolved_tasks);
-
-        // unsolved_task
-
-        // unsolved_tasks.retain_mut(|(_tp,tasks)| {
-        //     tasks.retain(|task| {
-        //         let solns = all_solutions.get(task).unwrap();
-        //         // retain if not enough solutions
-        //         if solns.len() >= num_solns {
-        //             println!("{}: {}", "Done enumerating for task".green(), task);
-        //             false
-        //         } else {
-        //             true
-        //         }
-        //     });
-        //     let i = idx.get();
-        //     // retain if there are tasks remaining
-        //     let res = if tasks.is_empty() {
-        //         println!("{}: <type>", "Done enumerating for type".green());
-
-        //         if curr <= i {
-        //             curr -= 1;
-        //         }
-
-        //         false
-        //     } else {
-        //         true
-        //     };
-        //     idx.set(i + 1);
-        //     return res;
-        // });
 
         if self.unsolved_tasks.is_empty() {
             return None
@@ -577,8 +546,8 @@ impl Iterator for SearchProgress {
         let single_hole = PartialExpr::single_hole(tp.return_type(&typeset), env.clone(), typeset);
 
         let work_item = WorkItem {
-            tp,
-            env,
+            // tp,
+            // env,
             tasks: tasks.clone(),
             upper_bound: self.curr_upper_bound,
             lower_bound: self.curr_upper_bound - self.cfg.step,
@@ -615,8 +584,6 @@ fn search_worker<D: Domain, M: ProbabilisticModel>(shared: Arc<Shared<D,M>>, thr
 
         let mut new_state = None;
         let mut all_done = true;
-
-        let initial_num_steals = {shared.stats.lock().unwrap().num_steals};
 
         // try work stealing
         for state in shared.thread_states.iter() {
@@ -659,10 +626,6 @@ fn search_worker<D: Domain, M: ProbabilisticModel>(shared: Arc<Shared<D,M>>, thr
                 }
             }
         }
-
-        all_done &= initial_num_steals == {
-            shared.stats.lock().unwrap().num_steals
-        };
 
         if all_done && thread_idx == 0 {
 
@@ -719,7 +682,7 @@ fn search_worker<D: Domain, M: ProbabilisticModel>(shared: Arc<Shared<D,M>>, thr
 
                     let all_solutions = search_progress.solutions.get_mut(&soln.task_name).unwrap();
 
-                    if all_solutions.len() == 0 {
+                    if all_solutions.len() == 1 {
                         // LOCK SAFETY: in no part of the code do we take the search progress lock while already holding the stats lock
                         let mut stats = shared.stats.lock().unwrap();
                         stats.num_never_solved -= 1;
@@ -821,7 +784,7 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(thread_idx: usize, work_it
             }
             local_stats.num_finished += 1;
 
-            let solved_tasks = check_correctness(&shared, &work_item, &state.expr, &mut local_stats);
+            let solved_tasks = check_correctness(shared, &work_item, &state.expr, &mut local_stats);
 
             for task_name in solved_tasks {
 
@@ -851,7 +814,7 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(thread_idx: usize, work_it
     }
 
     // lock scope
-    { shared.stats.lock().unwrap().local.transfer(&mut local_stats) };
+    shared.stats.lock().unwrap().local.transfer(&mut local_stats);
     // lock scope
     { *shared.thread_states[thread_idx].lock().unwrap() = None; }
     solutions
@@ -872,11 +835,8 @@ fn check_correctness<D: Domain, M: ProbabilisticModel>(shared: &Shared<D,M>, wor
             exec_env.reverse(); // for proper arg order
 
             // println!("about to exec");
-            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-                expanded.expr.get(0).eval(&exec_env, &shared.dsl, Some(Duration::from_millis(shared.cfg.eval_timeout)))
-            }));
-            match result {
-                Ok(Ok(res)) => {
+            match expanded.expr.get(0).eval(&exec_env, &shared.dsl, Some(Duration::from_millis(shared.cfg.eval_timeout))) {
+                Ok(res) => {
                     local_stats.num_eval_ok += 1;
                     if res == io.output {
                         if shared.cfg.verbose_eval { println!("{} {} {:?}", expanded, "=>".green(), res); }
@@ -886,20 +846,11 @@ fn check_correctness<D: Domain, M: ProbabilisticModel>(shared: &Shared<D,M>, wor
                         break
                     }
                 },
-                Ok(Err(err)) => {
+                Err(err) => {
                     if shared.cfg.verbose_eval { println!("{} {} err: {}", "=>".red(), expanded, err); }
                     local_stats.num_eval_err += 1;
                     solved = false;
                     break
-                }
-                Err(_) => {
-                    // panic catch
-                    if shared.cfg.verbose_eval{
-                        println!("{} {} panic during evaluation", "=>".red(), expanded);
-                    }
-                    local_stats.num_eval_err += 1;
-                    solved = false;
-                    break;
                 }
             }
         }
