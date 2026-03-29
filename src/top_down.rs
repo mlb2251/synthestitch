@@ -1,7 +1,7 @@
 use clap::Parser;
 use itertools::Itertools;
 use serde::Serialize;
-use std::{collections::{HashMap},sync::{Mutex, Arc}, thread, fmt::{Display, Formatter}};
+use std::{collections::HashMap, fmt::{Display, Formatter}, panic, sync::{Arc, Mutex}, thread};
 use std::time::{Duration,Instant};
 use colorful::Colorful;
 use crate::*;
@@ -474,11 +474,10 @@ impl Iterator for SearchProgress {
     type Item = (WorkItem,PartialExpr);
     fn next(&mut self) -> Option<Self::Item> {
         let unsolved_tasks = &mut self.unsolved_tasks;
-        
         let all_solutions = &self.solutions;
         let num_solns = self.cfg.num_solns;
 
-        for (i, (_, tasks)) in unsolved_tasks.iter_mut().enumerate() {
+        unsolved_tasks.retain_mut(|(_tp,tasks)| {
             tasks.retain(|task| {
                 let solns = all_solutions.get(task).unwrap();
                 // retain if not enough solutions
@@ -492,14 +491,11 @@ impl Iterator for SearchProgress {
             // retain if there are tasks remaining
             if tasks.is_empty() {
                 println!("{}: <type>", "Done enumerating for type".green());
-
-                if i <= self.curr {
-                    self.curr -= 1;
-                }
+                false
+            } else {
+                true
             }
-        }
-
-        unsolved_tasks.retain(|(_tp, tasks)| !tasks.is_empty());
+        });
 
         if self.unsolved_tasks.is_empty() {
             return None
@@ -826,9 +822,11 @@ fn check_correctness<D: Domain, M: ProbabilisticModel>(shared: &Shared<D,M>, wor
             let mut exec_env: Env<D> = io.inputs.clone().into();
             exec_env.reverse(); // for proper arg order
 
-            // println!("about to exec");
-            match expanded.expr.get(0).eval(&exec_env, &shared.dsl, Some(Duration::from_millis(shared.cfg.eval_timeout))) {
-                Ok(res) => {
+            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                expanded.expr.get(0).eval(&exec_env, &shared.dsl, Some(Duration::from_millis(shared.cfg.eval_timeout)))
+            }));
+            match result {
+                Ok(Ok(res)) => {
                     local_stats.num_eval_ok += 1;
                     if res == io.output {
                         if shared.cfg.verbose_eval { println!("{} {} {:?}", expanded, "=>".green(), res); }
@@ -838,11 +836,20 @@ fn check_correctness<D: Domain, M: ProbabilisticModel>(shared: &Shared<D,M>, wor
                         break
                     }
                 },
-                Err(err) => {
+                Ok(Err(err)) => {
                     if shared.cfg.verbose_eval { println!("{} {} err: {}", "=>".red(), expanded, err); }
                     local_stats.num_eval_err += 1;
                     solved = false;
                     break
+                }
+                Err(_) => {
+                    // panic catch
+                    if shared.cfg.verbose_eval{
+                        println!("{} {} panic during evaluation", "=>".red(), expanded);
+                    }
+                    local_stats.num_eval_err += 1;
+                    solved = false;
+                    break;
                 }
             }
         }
