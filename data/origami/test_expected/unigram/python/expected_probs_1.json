@@ -1,0 +1,16 @@
+{
+  "solutions": {
+    "constant_2": [
+      "py_const_2"
+    ],
+    "double": [
+      "(add_py $0 $0)"
+    ],
+    "square": [
+      "(mul_py $0 $0)"
+    ],
+    "sum_list": [
+      "(sum_py $0)"
+    ]
+  }
+}
