@@ -12,7 +12,6 @@ pub use {
     top_down::*,
 };
 
-use colorful::Colorful;
 use std::fs::File;
 use std::path::Path;
 use clap::{Parser,ArgEnum};
@@ -21,10 +20,8 @@ use std::path::PathBuf;
 use serde_json::de::from_reader;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use lambdas::{DSL, Domain};
 use lambdas::domains::simple::*;
 use lambdas::domains::prim_lists::*;
-use lambdas::domains::py::*;
 use lambdas::domains::py::PyVal;
 
 
@@ -102,13 +99,13 @@ pub fn dispatch_domain(args: &Args, reg_dsl: Option<&DSL<PyVal>>) -> String {
 
     match &args.domain {
         DomainChoice::Simple => {
-            return dispatch_model::<SimpleVal>(args, None);
+            dispatch_model::<SimpleVal>(args, None)
         },
         DomainChoice::List => {
-            return dispatch_model::<ListVal>(args, None);
+            dispatch_model::<ListVal>(args, None)
         },
         DomainChoice::Python => {
-            return dispatch_model::<PyVal>(args, reg_dsl);
+            dispatch_model::<PyVal>(args, reg_dsl)
         },
     }
 }
@@ -177,12 +174,12 @@ fn dispatch_model<D: Domain>(args: &Args, reg_dsl: Option<&DSL<D>>) -> String {
 fn run<D: Domain, M: ProbabilisticModel>(args: &Args, model : &M, reg_dsl : Option<&DSL<D>>) -> String {
     let native_dsl = D::new_dsl();
     let dsl = match reg_dsl {
-        Some(d) => reg_dsl.unwrap(),
+        Some(_d) => reg_dsl.unwrap(),
         None => &native_dsl
     };
     
     //reg_dsl;//D::new_dsl();
-    let tasks: Vec<Task<D>> = args.file.as_ref().map(|path| parse_tasks(path,&dsl)).unwrap_or(vec![]);
+    let tasks: Vec<Task<D>> = args.file.as_ref().map(|path| parse_tasks(path, dsl)).unwrap_or(vec![]);
 
     if let Some(track_all) =  &args.track_all {
         let to_track = parse_tracked(track_all);
@@ -195,7 +192,7 @@ fn run<D: Domain, M: ProbabilisticModel>(args: &Args, model : &M, reg_dsl : Opti
             cfg.one_soln = true;
             cfg.min_ll = Some(-100.);
             cfg.threads = 1;
-            let search_progress = top_down(model, &dsl, &tasks, &cfg);
+            let search_progress = top_down(model, dsl, &tasks, &cfg);
             let solns = search_progress.solutions;
             if solns[&task_name].is_empty() {
                 misses.push((task_name, target_soln));
@@ -209,7 +206,7 @@ fn run<D: Domain, M: ProbabilisticModel>(args: &Args, model : &M, reg_dsl : Opti
     }
 
     // Normal enumeration path
-    let search_progress = top_down(model, &dsl, &tasks, &args.top_down_cfg);
+    let search_progress = top_down(model, dsl, &tasks, &args.top_down_cfg);
 
     // Convert solutions to JSON
     let mut sols_map: BTreeMap<String, Value> = BTreeMap::new();
