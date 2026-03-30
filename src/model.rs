@@ -125,9 +125,7 @@ impl<M: ProbabilisticModel> ProbabilisticModel for OrigamiModel<M> {
 /// who is the parent of the hole and which child are we of it. Doesnt handle higher order stuff.
 /// bc we didnt need that to replicate the dreamcoder symmetry rules
 fn parent_and_arg_idx<'a>(expr: &'a PartialExpr, hole: &Hole) -> Option<(&'a Node, usize)> {
-    if hole.parent.is_none() {
-        return None
-    }
+    hole.parent?;
     if let Node::App(f,_) = expr.expr[hole.parent.unwrap()] {
         let mut arg_idx = 0;
         let mut func = f;
@@ -140,7 +138,7 @@ fn parent_and_arg_idx<'a>(expr: &'a PartialExpr, hole: &Hole) -> Option<(&'a Nod
             }
         }
     } else {
-        return None // we dont handle Lams
+        None // we dont handle Lams
     }
 }
 
@@ -239,13 +237,13 @@ impl ProbabilisticModel for BigramModel{
             let key = (parent, arg_idx, current);
 
             if let Some(ll) = self.bigrams.get(&key) {
-                return NotNan::new(*ll).unwrap();
+                NotNan::new(*ll).unwrap()
             } else {
-                return self.fallback_ll;
+                self.fallback_ll
             }
         } else {
             // No parent
-            return self.fallback_ll;
+            self.fallback_ll
         }
     }
 }
