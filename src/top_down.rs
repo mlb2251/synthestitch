@@ -1,7 +1,7 @@
 use clap::Parser;
 use itertools::Itertools;
 use serde::Serialize;
-use std::{collections::{HashMap},sync::{Mutex, Arc}, thread, fmt::{Display, Formatter}};
+use std::{collections::HashMap, fmt::{Display, Formatter}, panic, sync::{Arc, Mutex}, thread};
 use std::time::{Duration,Instant};
 use colorful::Colorful;
 use crate::*;
@@ -410,8 +410,6 @@ pub fn top_down<D: Domain, M: ProbabilisticModel>(
 
 #[derive(Debug, Clone)]
 pub struct WorkItem {
-    // tp: Type,
-    // env: Vec<Type>,
     tasks: Vec<TaskName>,
     upper_bound: NotNan<f32>,
     lower_bound: NotNan<f32>,
@@ -474,11 +472,10 @@ impl Iterator for SearchProgress {
     type Item = (WorkItem,PartialExpr);
     fn next(&mut self) -> Option<Self::Item> {
         let unsolved_tasks = &mut self.unsolved_tasks;
-        
         let all_solutions = &self.solutions;
         let num_solns = self.cfg.num_solns;
 
-        for (i, (_, tasks)) in unsolved_tasks.iter_mut().enumerate() {
+        unsolved_tasks.retain_mut(|(_tp,tasks)| {
             tasks.retain(|task| {
                 let solns = all_solutions.get(task).unwrap();
                 // retain if not enough solutions
@@ -492,14 +489,11 @@ impl Iterator for SearchProgress {
             // retain if there are tasks remaining
             if tasks.is_empty() {
                 println!("{}: <type>", "Done enumerating for type".green());
-
-                if i <= self.curr {
-                    self.curr -= 1;
-                }
+                false
+            } else {
+                true
             }
-        }
-
-        unsolved_tasks.retain(|(_tp, tasks)| !tasks.is_empty());
+        });
 
         if self.unsolved_tasks.is_empty() {
             return None
@@ -538,8 +532,6 @@ impl Iterator for SearchProgress {
         let single_hole = PartialExpr::single_hole(tp.return_type(&typeset), env.clone(), typeset);
 
         let work_item = WorkItem {
-            // tp,
-            // env,
             tasks: tasks.clone(),
             upper_bound: self.curr_upper_bound,
             lower_bound: self.curr_upper_bound - self.cfg.step,
@@ -577,6 +569,8 @@ fn search_worker<D: Domain, M: ProbabilisticModel>(shared: Arc<Shared<D,M>>, thr
         let mut new_state = None;
         let mut all_done = true;
 
+        let initial_num_steals = {shared.stats.lock().unwrap().num_steals};
+
         // try work stealing
         for state in shared.thread_states.iter() {
             // LOCK SAFETY: lock will drop at end of for-loop, and we aren't currently holding any locks and will not take
@@ -609,15 +603,16 @@ fn search_worker<D: Domain, M: ProbabilisticModel>(shared: Arc<Shared<D,M>>, thr
                     }
                     // set stolen_from to have just 1 expansion
                     new_state.as_mut().unwrap().save_states[stolen_from].num_expansions = num_to_take;
-
-                    // println!("[Thread {:?}] {}", thread::current().id(), "Stole work".yellow());
-
                     shared.stats.lock().unwrap().num_steals += 1;
 
                     break
                 }
             }
         }
+
+        all_done &= initial_num_steals == {
+            shared.stats.lock().unwrap().num_steals
+        };
 
         if all_done && thread_idx == 0 {
 
@@ -674,7 +669,7 @@ fn search_worker<D: Domain, M: ProbabilisticModel>(shared: Arc<Shared<D,M>>, thr
 
                     let all_solutions = search_progress.solutions.get_mut(&soln.task_name).unwrap();
 
-                    if all_solutions.len() == 1 {
+                    if all_solutions.is_empty() {
                         // LOCK SAFETY: in no part of the code do we take the search progress lock while already holding the stats lock
                         let mut stats = shared.stats.lock().unwrap();
                         stats.num_never_solved -= 1;
@@ -731,7 +726,6 @@ fn search_in_bounds<D: Domain, M: ProbabilisticModel>(thread_idx: usize, work_it
             }
         }
         
-
         // occasionally transfer stats over. Note num_processed gets reset to 0 during a transfer
         if local_stats.num_processed >= 25_000 {
             shared.stats.lock().unwrap().local.transfer(&mut local_stats);
@@ -826,9 +820,11 @@ fn check_correctness<D: Domain, M: ProbabilisticModel>(shared: &Shared<D,M>, wor
             let mut exec_env: Env<D> = io.inputs.clone().into();
             exec_env.reverse(); // for proper arg order
 
-            // println!("about to exec");
-            match expanded.expr.get(0).eval(&exec_env, &shared.dsl, Some(Duration::from_millis(shared.cfg.eval_timeout))) {
-                Ok(res) => {
+            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                expanded.expr.get(0).eval(&exec_env, &shared.dsl, Some(Duration::from_millis(shared.cfg.eval_timeout)))
+            }));
+            match result {
+                Ok(Ok(res)) => {
                     local_stats.num_eval_ok += 1;
                     if res == io.output {
                         if shared.cfg.verbose_eval { println!("{} {} {:?}", expanded, "=>".green(), res); }
@@ -838,15 +834,23 @@ fn check_correctness<D: Domain, M: ProbabilisticModel>(shared: &Shared<D,M>, wor
                         break
                     }
                 },
-                Err(err) => {
+                Ok(Err(err)) => {
                     if shared.cfg.verbose_eval { println!("{} {} err: {}", "=>".red(), expanded, err); }
                     local_stats.num_eval_err += 1;
                     solved = false;
                     break
                 }
+                Err(_) => {
+                    // panic catch
+                    if shared.cfg.verbose_eval{
+                        println!("{} {} panic during evaluation", "=>".red(), expanded);
+                    }
+                    local_stats.num_eval_err += 1;
+                    solved = false;
+                    break;
+                }
             }
         }
-        // solved_buf.push((unnormalized_ll, task.name.clone(), expanded.clone()));
         if solved {
             solved_tasks.push(task.name.clone());
         }
