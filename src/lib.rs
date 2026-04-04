@@ -221,7 +221,7 @@ fn run<D: Domain, M: ProbabilisticModel>(args: &Args, model : &M, reg_dsl : Opti
     let result = serde_json::to_string(&json!({ "solutions": sols_map })).unwrap();
 
     if let Some(out) = &args.out{
-        std::fs::write(&out, &result).expect("failed to write output file");
+        std::fs::write(out, &result).expect("failed to write output file");
     }
 
     result
