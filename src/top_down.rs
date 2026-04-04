@@ -475,7 +475,7 @@ impl Iterator for SearchProgress {
         let all_solutions = &self.solutions;
         let num_solns = self.cfg.num_solns;
 
-        unsolved_tasks.retain_mut(|(_tp,tasks)| {
+        for (i, (_, tasks)) in unsolved_tasks.iter_mut().enumerate() {
             tasks.retain(|task| {
                 let solns = all_solutions.get(task).unwrap();
                 // retain if not enough solutions
@@ -489,11 +489,14 @@ impl Iterator for SearchProgress {
             // retain if there are tasks remaining
             if tasks.is_empty() {
                 println!("{}: <type>", "Done enumerating for type".green());
-                false
-            } else {
-                true
+
+                if i <= self.curr {
+                    self.curr -= 1;
+                }
             }
-        });
+        }
+
+        unsolved_tasks.retain(|(_tp, tasks)| !tasks.is_empty());
 
         if self.unsolved_tasks.is_empty() {
             return None
