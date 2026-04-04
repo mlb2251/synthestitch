@@ -12,6 +12,7 @@ pub use {
     top_down::*,
 };
 
+use colorful::Colorful;
 use std::fs::File;
 use std::path::Path;
 use clap::{Parser,ArgEnum};
@@ -34,8 +35,8 @@ pub struct Args {
     pub file: Option<std::path::PathBuf>,
 
     /// json output file
-    #[clap(short, long, parse(from_os_str), default_value = "out/out.json")]
-    pub out: PathBuf,
+    #[clap(short, long, parse(from_os_str))]
+    pub out: Option<PathBuf>,
 
     /// Probabilistic Model to use
     #[clap(short, long, arg_enum, default_value = "uniform")]
@@ -109,15 +110,6 @@ pub fn dispatch_domain(args: &Args, reg_dsl: Option<&DSL<PyVal>>) -> String {
         },
     }
 }
-
-// pub fn dispatch_domain_simple(args: &Args, reg_dsl: &DSL<SimpleVal>) -> String {
-//     dispatch_model::<SimpleVal>(args, reg_dsl)
-// }
-
-// pub fn dispatch_domain_py(args: &Args, reg_dsl: &DSL<PyVal>) -> String {
-//     dispatch_model::<PyVal>(args, reg_dsl)
-// }
-
 
 fn dispatch_model<D: Domain>(args: &Args, reg_dsl: Option<&DSL<D>>) -> String {
     match &args.model {
@@ -203,12 +195,20 @@ fn run<D: Domain, M: ProbabilisticModel>(args: &Args, model : &M, reg_dsl : Opti
                 hits.push((task_name, soln));
             }
         }
+        println!("\n===SUMMARY===");
+        println!("Hits: {}/{}", hits.len(), hits.len() + misses.len());
+        hits.sort_by_key(|(_,soln)| -soln.ll);
+        for (task_name, soln) in hits {
+            println!("{} {}: {}", "Solved".green(), task_name,  soln);
+        }
+        for (task_name, soln) in misses {
+            println!("{} {} -> {}", "Miss".red(), task_name, soln);
+        }
+        return "Done Tracking".to_string();
     }
 
-    // Normal enumeration path
     let search_progress = top_down(model, dsl, &tasks, &args.top_down_cfg);
 
-    // Convert solutions to JSON
     let mut sols_map: BTreeMap<String, Value> = BTreeMap::new();
     for (task, sols) in &search_progress.solutions {
         let items: Vec<Value> = sols.iter().map(|sol| {
@@ -218,7 +218,13 @@ fn run<D: Domain, M: ProbabilisticModel>(args: &Args, model : &M, reg_dsl : Opti
         sols_map.insert(key, Value::Array(items));
     }
 
-    serde_json::to_string(&json!({ "solutions": sols_map })).unwrap()
+    let result = serde_json::to_string(&json!({ "solutions": sols_map })).unwrap();
+
+    if let Some(out) = &args.out{
+        std::fs::write(&out, &result).expect("failed to write output file");
+    }
+
+    result
 }
 
 
