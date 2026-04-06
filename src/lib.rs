@@ -57,13 +57,13 @@ pub struct Args {
     #[clap(long)]
     pub unigrams_path: Option<String>,
 
-    /// Probability fallback for primitives
-    #[clap(long, default_value="0.0")]
-    pub primitive_fallback: f32,
+    /// Log probability fallback
+    #[clap(long, default_value="-inf")]
+    pub log_prob_fallback: f32,
 
-    /// Probability fallback for primitives
-    #[clap(long, default_value="0.0")]
-    pub variable_fallback: f32,
+    // /// Log probability fallback for variables
+    // #[clap(long, default_value="-inf")]
+    // pub variable_fallback: f32,
 
     //Optional path to a JSOn file with bigram probabilities
     #[clap(long)]
@@ -118,45 +118,34 @@ fn dispatch_model<D: Domain>(args: &Args, reg_dsl: Option<&DSL<D>>) -> String {
                run::<D, _>(args, &model, reg_dsl)
         },
         ModelChoice::Unigram => {
-            let unigrams: std::collections::HashMap<String, f32> = if let Some(path) = args.unigrams_path.as_ref() {
-                let json_str = std::fs::read_to_string(path)
-                    .expect("Failed to read JSON file");
-                serde_json::from_str(&json_str)
-                    .expect("Failed to parse JSON file")
-            } else {
-                std::collections::HashMap::new()
-            };  // get unigram probability table
+            let path = args.unigrams_path.as_ref().expect("Unigram model selected but no unigrams_path provided");
+            let json_str = std::fs::read_to_string(path).expect("Failed to read JSON file");
+            let unigrams: std::collections::HashMap<String, f32> = serde_json::from_str(&json_str)
+                    .expect("Failed to parse JSON file");
 
-            let prim_ll_fallback = NotNan::new(args.primitive_fallback).unwrap();
-            let var_ll_fallback = NotNan::new(args.variable_fallback).unwrap();
-            let model = unigram_model(unigrams, var_ll_fallback, prim_ll_fallback);
+            let fallback_ll = NotNan::new(args.log_prob_fallback).unwrap();
+            let model = unigram_model(unigrams, fallback_ll);
             run::<D, _>(args, &model, reg_dsl)
         }
         ModelChoice::Bigram => {
-            let bigrams: std::collections::HashMap<(String, usize, String), f32> = if let Some(path) = args.bigrams_path.as_ref() {
-                let json_str = std::fs::read_to_string(path)
-                    .expect("Failed to read bigram JSON file");
+            let path = args.bigrams_path.as_ref().expect("Bigram model selected but no bigrams_path provided");
+            let json_str = std::fs::read_to_string(path).expect("Failed to read bigram JSON file");
+            let raw: std::collections::HashMap<String, f32> = serde_json::from_str(&json_str)
+                .expect("Failed to parse bigram JSON as flat string-keyed map");
 
-                let raw: std::collections::HashMap<String, f32> = serde_json::from_str(&json_str)
-                    .expect("Failed to parse bigram JSON as flat string-keyed map");
+            let bigrams: std::collections::HashMap<(String, usize, String), f32> = raw.into_iter()
+            .map(|(key, value)| {
+                let parts: Vec<&str> = key.split('|').collect();
+                assert_eq!(parts.len(), 3, "Malformed bigram key: {}", key);
+                let parent = parts[0].to_string();
+                let arg_idx = parts[1].parse::<usize>()
+                    .expect("Invalid arg_idx in bigram key");
+                let current = parts[2].to_string();
+                ((parent, arg_idx, current), value)
+            })
+            .collect();
 
-
-                raw.into_iter()
-                    .map(|(key, value)| {
-                        let parts: Vec<&str> = key.split('|').collect();
-                        assert_eq!(parts.len(), 3, "Malformed bigram key: {}", key);
-                        let parent = parts[0].to_string();
-                        let arg_idx = parts[1].parse::<usize>()
-                            .expect("Invalid arg_idx in bigram key");
-                        let current = parts[2].to_string();
-                        ((parent, arg_idx, current), value)
-                    })
-                    .collect()
-                    }  else {
-                        std::collections::HashMap::new()
-                };
-
-            let fallback_ll = NotNan::new(args.primitive_fallback).unwrap();
+            let fallback_ll = NotNan::new(args.log_prob_fallback).unwrap();
             let model = bigram_model(bigrams, fallback_ll);
             run::<D, _>(args, &model, reg_dsl)
         }
@@ -166,7 +155,7 @@ fn dispatch_model<D: Domain>(args: &Args, reg_dsl: Option<&DSL<D>>) -> String {
 fn run<D: Domain, M: ProbabilisticModel>(args: &Args, model : &M, reg_dsl : Option<&DSL<D>>) -> String {
     let native_dsl = D::new_dsl();
     let dsl = match reg_dsl {
-        Some(_d) => reg_dsl.unwrap(),
+        Some(reg_dsl_actual) => reg_dsl_actual,
         None => &native_dsl
     };
     
@@ -234,10 +223,9 @@ fn uniform_model() -> impl ProbabilisticModel {
 
 fn unigram_model(
     unigrams: std::collections::HashMap<String, f32>,
-    var_ll_fallback: NotNan<f32>,
-    prim_ll_fallback: NotNan<f32>
+    fallback_ll: NotNan<f32>,
     ) -> impl ProbabilisticModel {
-        UnigramModel::new(unigrams, var_ll_fallback, prim_ll_fallback)
+        UnigramModel::new(unigrams, fallback_ll)
     }
 
 fn bigram_model(

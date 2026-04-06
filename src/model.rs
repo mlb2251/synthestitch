@@ -172,17 +172,15 @@ impl ProbabilisticModel for UniformModel {
 #[derive(Clone,Debug)]
 pub struct UnigramModel {
     unigrams: std::collections::HashMap<String, f32>,
-    var_ll_fallback: NotNan<f32>,
-    prim_ll_fallback: NotNan<f32>
+    fallback_ll: NotNan<f32>
 }
 
 impl UnigramModel{
     pub fn new(
         unigrams: std::collections::HashMap<String, f32>,
-        var_ll_fallback: NotNan<f32>,
-        prim_ll_fallback: NotNan<f32>
+        fallback_ll: NotNan<f32>
     ) -> UnigramModel{
-        UnigramModel{unigrams, var_ll_fallback, prim_ll_fallback}
+        UnigramModel{unigrams, fallback_ll}
     }
 }
 
@@ -193,13 +191,13 @@ impl ProbabilisticModel for UnigramModel{
             Node::Var(_,_) => if let Some(ll) = self.unigrams.get("var"){
                     NotNan::new(*ll).unwrap()
                 } else {
-                    self.var_ll_fallback
+                    self.fallback_ll
                 },
             Node::Prim(symbol) => {
                 if let Some(ll) = self.unigrams.get(&symbol.to_string()){
                     NotNan::new(*ll).unwrap()
                 } else {
-                    self.prim_ll_fallback
+                    self.fallback_ll
                 }
             }
             _ => unreachable!() 
@@ -227,7 +225,7 @@ impl ProbabilisticModel for BigramModel{
         let current= match prod {
             Node::Prim(symbol) => symbol.to_string(),
             Node::Var(_,_) => "var".to_string(),
-            _ => return self.fallback_ll
+            _ => unreachable!()
         };
 
         // Try finding the parent and arg index
@@ -235,7 +233,7 @@ impl ProbabilisticModel for BigramModel{
             let parent = match parent_node {
                 Node::Prim(symbol) => symbol.to_string(),
                 Node:: Var(_,_) => "var".to_string(),
-                _ => return self.fallback_ll
+                _ => unreachable!()
             };
 
             let key = (parent, arg_idx, current);
