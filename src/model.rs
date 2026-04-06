@@ -12,7 +12,9 @@ pub trait ProbabilisticModel: Clone + Send + Sync + std::fmt::Debug {
         // todo implement this recursively making use of expansion_unnormalized_ll
         unimplemented!()
     }
+
 }
+
 
 /// This wraps a model to make it behave roughly like the DreamCoder enumerator, which when it detects a fixpoint operator
 /// it give it 0% probability for using it lower in the program. Specifically what original DC does is
@@ -116,6 +118,8 @@ impl<M: ProbabilisticModel> ProbabilisticModel for OrigamiModel<M> {
                     }
                 }
         }
+
+
         // default
         self.model.expansion_unnormalized_ll(prod, expr, hole)
     }
