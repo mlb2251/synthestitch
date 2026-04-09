@@ -168,3 +168,84 @@ impl ProbabilisticModel for UniformModel {
         }
     }
 }
+
+#[derive(Clone,Debug)]
+pub struct UnigramModel {
+    unigrams: std::collections::HashMap<String, f32>,
+    fallback_ll: NotNan<f32>
+}
+
+impl UnigramModel{
+    pub fn new(
+        unigrams: std::collections::HashMap<String, f32>,
+        fallback_ll: NotNan<f32>
+    ) -> UnigramModel{
+        UnigramModel{unigrams, fallback_ll}
+    }
+}
+
+impl ProbabilisticModel for UnigramModel{
+    // #[inline(always)]
+    fn expansion_unnormalized_ll(&self, prod: &Node, _expr: &PartialExpr, _hole: &Hole) -> NotNan<f32> {
+        match prod {
+            Node::Var(_,_) => if let Some(ll) = self.unigrams.get("var"){
+                    NotNan::new(*ll).unwrap()
+                } else {
+                    self.fallback_ll
+                },
+            Node::Prim(symbol) => {
+                if let Some(ll) = self.unigrams.get(&symbol.to_string()){
+                    NotNan::new(*ll).unwrap()
+                } else {
+                    self.fallback_ll
+                }
+            }
+            _ => unreachable!() 
+        }
+    }
+}
+
+#[derive(Clone,Debug)]
+pub struct BigramModel{
+    bigrams: std::collections::HashMap<(String, usize, String), f32>,
+    fallback_ll: NotNan<f32>
+}
+
+impl BigramModel{
+    pub fn new(
+        bigrams: std::collections::HashMap<(String, usize, String), f32>,
+        fallback_ll: NotNan<f32>
+    ) -> BigramModel{
+        BigramModel { bigrams, fallback_ll}
+    }
+}
+
+impl ProbabilisticModel for BigramModel{
+    fn expansion_unnormalized_ll(&self, prod: &Node, expr: &PartialExpr, hole: &Hole) -> NotNan<f32> {
+        let current= match prod {
+            Node::Prim(symbol) => symbol.to_string(),
+            Node::Var(_,_) => "var".to_string(),
+            _ => unreachable!()
+        };
+
+        // Try finding the parent and arg index
+        if let Some((parent_node, arg_idx)) = parent_and_arg_idx(expr, hole){
+            let parent = match parent_node {
+                Node::Prim(symbol) => symbol.to_string(),
+                Node:: Var(_,_) => "var".to_string(),
+                _ => unreachable!()
+            };
+
+            let key = (parent, arg_idx, current);
+
+            if let Some(ll) = self.bigrams.get(&key) {
+                NotNan::new(*ll).unwrap()
+            } else {
+                self.fallback_ll
+            }
+        } else {
+            // No parent
+            self.fallback_ll
+        }
+    }
+}
