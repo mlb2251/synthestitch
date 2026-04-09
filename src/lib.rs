@@ -61,11 +61,7 @@ pub struct Args {
     #[clap(long, default_value="-inf")]
     pub log_prob_fallback: f32,
 
-    // /// Log probability fallback for variables
-    // #[clap(long, default_value="-inf")]
-    // pub variable_fallback: f32,
-
-    //Optional path to a JSOn file with bigram probabilities
+    //Optional path to a JSON file with bigram probabilities
     #[clap(long)]
     pub bigrams_path: Option<String>
 }
