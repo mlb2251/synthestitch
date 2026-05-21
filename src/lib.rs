@@ -110,8 +110,15 @@ pub fn dispatch_domain(args: &Args, reg_dsl: Option<&DSL<PyVal>>) -> String {
 fn dispatch_model<D: Domain>(args: &Args, reg_dsl: Option<&DSL<D>>) -> String {
     match &args.model {
         ModelChoice::Uniform => {
-               let model = uniform_model();
-               run::<D, _>(args, &model, reg_dsl)
+            let model = uniform_model();
+            match &args.domain {
+                DomainChoice::List => {
+                    run::<D, _>(args, &origami_symmetry_model(model), reg_dsl)
+                },
+                _ => {
+                    run::<D, _>(args, &model, reg_dsl)
+                }
+            }
         },
         ModelChoice::Unigram => {
             let path = args.unigrams_path.as_ref().expect("Unigram model selected but no unigrams_path provided");
@@ -121,7 +128,14 @@ fn dispatch_model<D: Domain>(args: &Args, reg_dsl: Option<&DSL<D>>) -> String {
 
             let fallback_ll = NotNan::new(args.log_prob_fallback).unwrap();
             let model = unigram_model(unigrams, fallback_ll);
-            run::<D, _>(args, &model, reg_dsl)
+            match &args.domain {
+                DomainChoice::List => {
+                    run::<D, _>(args, &origami_symmetry_model(model), reg_dsl)
+                },
+                _ => {
+                    run::<D, _>(args, &model, reg_dsl)
+                }
+            }
         }
         ModelChoice::Bigram => {
             let path = args.bigrams_path.as_ref().expect("Bigram model selected but no bigrams_path provided");
@@ -143,7 +157,14 @@ fn dispatch_model<D: Domain>(args: &Args, reg_dsl: Option<&DSL<D>>) -> String {
 
             let fallback_ll = NotNan::new(args.log_prob_fallback).unwrap();
             let model = bigram_model(bigrams, fallback_ll);
-            run::<D, _>(args, &model, reg_dsl)
+            match &args.domain {
+                DomainChoice::List => {
+                    run::<D, _>(args, &origami_symmetry_model(model), reg_dsl)
+                },
+                _ => {
+                    run::<D, _>(args, &model, reg_dsl)
+                }
+            }
         }
     }
 }
@@ -230,3 +251,27 @@ fn bigram_model(
     ) -> impl ProbabilisticModel {
         BigramModel::new(bigrams, fallback_ll)
     }
+
+fn origami_symmetry_model(model: impl ProbabilisticModel) -> impl ProbabilisticModel{
+    OrigamiModel::new(
+        SymmetryRuleModel::new(
+                        model,
+                 &[(0,"car","cons"), // arg_idx, parent, child
+                        (0,"car","empty"),
+                        (0,"cdr","cons"),
+                        (0,"cdr","empty"),
+                        (0,"+","0"),
+                        (1,"+","0"),
+                        (1,"-","0"),
+                        (0,"+","+"),
+                        (0,"*","*"),
+                        (0,"*","0"),
+                        (1,"*","0"),
+                        (0,"*","1"),
+                        (1,"*","1"),
+                        (0,"empty?","cons"),
+                        (0,"empty?","empty")]),
+        "fix1".into(),
+        "fix".into()
+    )
+}
